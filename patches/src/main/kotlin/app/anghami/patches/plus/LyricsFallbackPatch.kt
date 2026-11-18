@@ -239,3 +239,44 @@ val lyricsLongPressPatch = bytecodePatch(
         )
     }
 }
+
+/**
+ * Adds native-lyrics capture for the OpenRouter action in the lyrics options.
+ * Full server lyrics are captured only; truncated/empty responses are ignored
+ * so the action cannot translate a teaser or the fallback guide.
+ */
+@Suppress("unused")
+val lyricsOpenRouterTranslationPatch = bytecodePatch(
+    name = "AI lyrics translation · OpenRouter",
+    description = "Adds opt-in OpenRouter translation beneath original lyrics, preserving each line's timestamp. Configure API key, model, and target language from the lyrics options.",
+    default = false,
+) {
+    compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
+    dependsOn(lyricsLongPressPatch)
+
+    execute {
+        val method = LyricsApiOnNextFingerprint.method
+        val captureAnchor = method.implementation!!.instructions.mapIndexedNotNull { index, ins ->
+            if (ins.opcode == Opcode.INVOKE_STATIC && ins is Instruction35c &&
+                (ins.reference as? MethodReference)?.let {
+                    it.definingClass == FALLBACK_HELPER && it.name == "maybeFetch"
+                } == true
+            ) {
+                index
+            } else {
+                null
+            }
+        }
+        check(captureAnchor.size == 1) {
+            "expected exactly 1 LRCLIB maybeFetch call in onNext, found ${captureAnchor.size}"
+        }
+        method.addInstructions(
+            captureAnchor[0] + 1,
+            """
+                iget-object v0, p0, LA7/F;->a:Lcom/anghami/ghost/pojo/Song;
+                iget-object v1, p0, LA7/F;->b:Ljava/lang/Object;
+                invoke-static {v0, p1, v1}, $FALLBACK_HELPER->rememberNativeLyrics(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+            """
+        )
+    }
+}

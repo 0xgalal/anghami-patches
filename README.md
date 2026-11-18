@@ -13,7 +13,7 @@ fails after patching.
 
 ### How to use these patches
 
-Click here to add these patches to Morphe: https://morphe.software/add-source?github=mohamedamrnady/anghami-patches
+Click here to add these patches to Morphe: https://morphe.software/add-source?github=0xgalal/anghami-patches
 
 Then in Morphe Manager (Expert Mode): pick the stock `the-stock-apk` + matching
 `arm64_v8a` + dpi splits (or a merged APK), select the patches below, and install.
@@ -22,9 +22,9 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.3.0](https://github.com/mohamedamrnady/anghami-patches/releases/tag/v1.3.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;18 patches total
+> **[v1.3.1](https://github.com/0xgalal/anghami-patches/releases/tag/v1.3.1)**&nbsp;&nbsp;•&nbsp;&nbsp;`feature/openrouter-dual-lyrics`&nbsp;&nbsp;•&nbsp;&nbsp;19 patches total
 <details open>
-<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;18 patches</summary>
+<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;19 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -34,6 +34,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 | 💊&nbsp;Patch | 📜&nbsp;Description | ⚙️&nbsp;Options |
 |----------|----------------|-----------|
+| [AI lyrics translation · OpenRouter](#ai-lyrics-translation-openrouter) | Adds opt-in OpenRouter translation beneath original lyrics, preserving each line’s timestamp. Configure the API key, model, and target language from the lyrics options. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
@@ -65,6 +66,21 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 Fingerprints pin 8.0.28 method shapes — re-verify them against a fresh decode
 before using these patches on any other app version.
+
+### AI lyrics translation via OpenRouter
+
+Enable **AI lyrics translation · OpenRouter** in Morphe. It includes the
+lyrics-options long-press and LRCLIB fallback patches it depends on. With
+lyrics loaded, long-press the player’s play/pause button and choose **AI
+translate lyrics · OpenRouter**. Enter an OpenRouter API key, model ID, and
+target language; the default model is `openai/gpt-4o-mini`, and the default
+language is Arabic on Arabic-locale devices or English otherwise.
+
+The original lyrics remain intact. Each translation is displayed beneath its
+source line, using the source line’s timestamp for synchronized lyrics.
+Settings, the API key, and cached translations are stored in app-private
+preferences; uncached lyrics are sent to OpenRouter only when translation is
+requested.
 
 ### 🛠️ Building locally
 
