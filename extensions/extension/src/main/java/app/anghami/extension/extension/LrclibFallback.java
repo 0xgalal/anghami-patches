@@ -1,14 +1,17 @@
 package app.anghami.extension.extension;
 
 import android.app.AlertDialog;
+import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
@@ -22,6 +25,7 @@ import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.security.MessageDigest;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -65,10 +69,17 @@ public final class LrclibFallback {
     private static final String UA = "AnghamiLyricsFallback/1.0 (+https://lrclib.net/docs)";
     private static final String PREFS = "lyrics_fallback";
     private static final String KEY_VERSION = "v1";
+    private static final String TRANSLATION_PREFS = "lyrics_openrouter";
+    private static final String OPENROUTER_URL =
+            "https://openrouter.ai/api/v1/chat/completions";
+    private static final String DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini";
     private static final long POS_TTL_MS = 30L * 24 * 3600 * 1000;
     private static final long NEG_TTL_MS = 7L * 24 * 3600 * 1000;
     private static final int MAX_ENTRIES = 500;
     private static final int HTTP_TIMEOUT_MS = 12000;
+    private static final int TRANSLATION_TIMEOUT_MS = 90000;
+    private static final int MAX_TRANSLATION_LINES = 800;
+    private static final int MAX_TRANSLATION_CHARS = 40000;
 
     private LrclibFallback() {
     }
@@ -86,6 +97,11 @@ public final class LrclibFallback {
     private static long lastDialogMs;
     private static final java.util.WeakHashMap<Object, String> renderedKeys =
             new java.util.WeakHashMap<Object, String>();
+    private static String translationSongId = "";
+    private static Object translationSong;
+    private static Object translationCallback;
+    private static boolean translationSourceSynced;
+    private static final List<Line> translationSourceLines = new ArrayList<Line>();
 
     // ================= entry points =================
 
@@ -97,6 +113,44 @@ public final class LrclibFallback {
     /** Called from the API error path (song has nothing usable on the server). */
     public static void maybeFetchNoResponse(Object songObj, Object callbackObj) {
         impl(songObj, null, callbackObj);
+    }
+
+    /**
+     * Captures the exact native lyrics payload before the app renders it.
+     * The OpenRouter action later combines each translated line with its
+     * original line and retains the source timestamp for synced lyrics.
+     */
+    public static void rememberNativeLyrics(Object songObj, Object responseObj,
+                                            Object callbackObj) {
+        try {
+            if (songObj == null || responseObj == null || callbackObj == null) return;
+            if (!isFullNativeResponse(responseObj)) return;
+            SongInfo song = readSong(songObj);
+            if (song == null) return;
+
+            String plain = getString(responseObj, "lyricsUnsynced");
+            List<?> nativeLines = getList(responseObj, "lyricsSynced");
+            List<Line> timed = new ArrayList<Line>();
+            if (nativeLines != null) {
+                for (Object nativeLine : nativeLines) {
+                    if (nativeLine == null) continue;
+                    Object text = getFieldUp(nativeLine, "line");
+                    Object ms = getFieldUp(nativeLine, "milliseconds");
+                    if (!(text instanceof String)) continue;
+                    Line line = new Line();
+                    line.text = (String) text;
+                    line.ms = ms instanceof Number ? ((Number) ms).intValue() : -1;
+                    timed.add(line);
+                }
+            }
+            boolean useSynced = !timed.isEmpty()
+                    && (getBoolean(responseObj, "isSynced")
+                    || plain == null || plain.trim().isEmpty());
+            setTranslationSource(song, songObj, callbackObj,
+                    useSynced ? timed : plainLines(plain), useSynced);
+        } catch (Throwable t) {
+            Log.d(TAG, "rememberNativeLyrics failed: " + t);
+        }
     }
 
     /**
@@ -353,6 +407,7 @@ public final class LrclibFallback {
                 lastOriginalResponse = responseObj;
                 substituted.add(responseObj);
             }
+            rememberNativeLyrics(songObj, responseObj, callbackObj);
             Log.d(TAG, "substituted cached (" + hit.queryUsed + ")");
         } catch (Throwable t) {
             Log.d(TAG, "substituteCached failed: " + t);
@@ -523,6 +578,102 @@ public final class LrclibFallback {
             s.hasDuration = s.duration > 0;
         }
         return s;
+    }
+
+    private static String songKey(SongInfo song) {
+        if (song.id != null && !song.id.isEmpty()) return song.id;
+        return normalize(song.artist, true) + "|" + normalize(song.title, true);
+    }
+
+    private static List<Line> plainLines(String plain) {
+        List<Line> out = new ArrayList<Line>();
+        if (plain == null || plain.trim().isEmpty()) return out;
+        String[] parts = plain.split("\\r?\\n", -1);
+        for (String part : parts) {
+            Line line = new Line();
+            line.text = part;
+            line.ms = -1;
+            out.add(line);
+        }
+        return out;
+    }
+
+    private static void setTranslationSource(SongInfo song, Object songObj,
+                                             Object callbackObj, List<Line> lines,
+                                             boolean synced) {
+        if (song == null || songObj == null || callbackObj == null) return;
+        synchronized (LrclibFallback.class) {
+            translationSongId = songKey(song);
+            translationSong = songObj;
+            translationCallback = callbackObj;
+            translationSourceSynced = synced;
+            translationSourceLines.clear();
+            if (lines == null) return;
+            for (Line source : lines) {
+                if (source == null) continue;
+                Line copy = new Line();
+                copy.text = source.text == null ? "" : source.text;
+                copy.ms = source.ms;
+                translationSourceLines.add(copy);
+            }
+        }
+    }
+
+    private static final class SourceSnapshot {
+        String songId;
+        boolean synced;
+        Object song;
+        Object callback;
+        List<Line> lines = new ArrayList<Line>();
+    }
+
+    private static SourceSnapshot translationSourceFor(Object songObj) {
+        try {
+            if (songObj == null) return null;
+            SongInfo song = readSong(songObj);
+            if (song == null) return null;
+            String wantedId = songKey(song);
+            synchronized (LrclibFallback.class) {
+                if (!wantedId.equals(translationSongId)
+                        || translationCallback == null
+                        || translationSourceLines.isEmpty()) return null;
+                SourceSnapshot snapshot = new SourceSnapshot();
+                snapshot.songId = translationSongId;
+                snapshot.synced = translationSourceSynced;
+                snapshot.song = translationSong;
+                snapshot.callback = translationCallback;
+                for (Line source : translationSourceLines) {
+                    Line copy = new Line();
+                    copy.text = source.text;
+                    copy.ms = source.ms;
+                    snapshot.lines.add(copy);
+                }
+                return snapshot;
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "translationSourceFor failed: " + t);
+            return null;
+        }
+    }
+
+    private static Object callbackForSong(Object songObj) {
+        try {
+            if (songObj == null) return null;
+            SongInfo song = readSong(songObj);
+            if (song == null) return null;
+            String wantedId = songKey(song);
+            synchronized (LrclibFallback.class) {
+                if (lastCallback != null && lastSong != null) {
+                    SongInfo last = readSong(lastSong);
+                    if (last != null && wantedId.equals(songKey(last))) return lastCallback;
+                }
+                if (translationCallback != null && wantedId.equals(translationSongId)) {
+                    return translationCallback;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private static Field fieldUp(Class<?> c, String name) {
@@ -714,6 +865,76 @@ public final class LrclibFallback {
             if (ar) return "موسيقية";
             if (fr) return "Instrumental";
             return "Instrumental";
+        }
+        if ("ai_translate".equals(key)) {
+            if (ar) return "ترجمة الكلمات بالذكاء الاصطناعي · OpenRouter";
+            if (fr) return "Traduire les paroles par IA · OpenRouter";
+            return "AI translate lyrics · OpenRouter";
+        }
+        if ("ai_title".equals(key)) {
+            if (ar) return "ترجمة الكلمات · OpenRouter";
+            if (fr) return "Traduction des paroles · OpenRouter";
+            return "AI lyrics translation · OpenRouter";
+        }
+        if ("ai_note".equals(key)) {
+            if (ar) return "ستظهر الترجمة أسفل كل سطر أصلي مع الحفاظ على التوقيت.";
+            if (fr) return "La traduction apparaît sous chaque ligne originale, synchronisée.";
+            return "Translations appear below each original line and keep lyric timing.";
+        }
+        if ("openrouter_key".equals(key)) {
+            if (ar) return "مفتاح OpenRouter API";
+            if (fr) return "Clé API OpenRouter";
+            return "OpenRouter API key";
+        }
+        if ("model".equals(key)) {
+            if (ar) return "معرّف النموذج (مثال: openai/gpt-4o-mini)";
+            if (fr) return "Identifiant du modèle (ex. openai/gpt-4o-mini)";
+            return "Model ID (e.g. openai/gpt-4o-mini)";
+        }
+        if ("target_language".equals(key)) {
+            if (ar) return "لغة الترجمة";
+            if (fr) return "Langue cible";
+            return "Target language";
+        }
+        if ("translate_now".equals(key)) {
+            if (ar) return "ترجمة الآن";
+            if (fr) return "Traduire";
+            return "Translate now";
+        }
+        if ("openrouter_config_required".equals(key)) {
+            if (ar) return "أدخل مفتاح API والنموذج ولغة الترجمة";
+            if (fr) return "Saisissez la clé API, le modèle et la langue cible";
+            return "Enter an API key, model, and target language";
+        }
+        if ("no_source_lyrics".equals(key)) {
+            if (ar) return "لا توجد كلمات محمّلة لهذه الأغنية";
+            if (fr) return "Aucune parole chargée pour ce titre";
+            return "No lyrics are loaded for this song";
+        }
+        if ("translation_too_long".equals(key)) {
+            if (ar) return "الكلمات طويلة جداً للترجمة دفعة واحدة";
+            if (fr) return "Les paroles sont trop longues pour une seule traduction";
+            return "Lyrics are too long to translate in one request";
+        }
+        if ("translating".equals(key)) {
+            if (ar) return "جارٍ ترجمة الكلمات عبر OpenRouter…";
+            if (fr) return "Traduction des paroles via OpenRouter…";
+            return "Translating lyrics with OpenRouter…";
+        }
+        if ("translation_failed".equals(key)) {
+            if (ar) return "فشلت ترجمة الكلمات";
+            if (fr) return "Échec de la traduction des paroles";
+            return "Lyrics translation failed";
+        }
+        if ("translation_done".equals(key)) {
+            if (ar) return "تم عرض الكلمات الأصلية والترجمة معاً";
+            if (fr) return "Paroles originales et traduction affichées ensemble";
+            return "Original and translated lyrics are now displayed together";
+        }
+        if ("source_changed".equals(key)) {
+            if (ar) return "تغيّرت الكلمات أثناء الترجمة؛ أعد المحاولة";
+            if (fr) return "Les paroles ont changé pendant la traduction. Réessayez.";
+            return "Lyrics changed during translation; please try again";
         }
         return key;
     }
@@ -1151,6 +1372,25 @@ public final class LrclibFallback {
                     Object response = buildResponse(songObj, plain, synced);
                     if (response == null) return;
                     List<Object> lines = buildLines(response, plain, synced);
+                    try {
+                        List<Line> sourceLines = new ArrayList<Line>();
+                        boolean sourceSynced = false;
+                        if (!"no-result".equals(queryUsed)
+                                && !"teaser-guide".equals(queryUsed)) {
+                            sourceLines = parseLrc(synced);
+                            sourceSynced = !sourceLines.isEmpty()
+                                    && (lastPreferSynced || plain == null || plain.isEmpty());
+                            if (!sourceSynced) sourceLines = plainLines(plain);
+                            if (!sourceSynced && sourceLines.isEmpty()
+                                    && !syncedIsEmpty(synced)) {
+                                sourceLines = parseLrc(synced);
+                                sourceSynced = !sourceLines.isEmpty();
+                            }
+                        }
+                        setTranslationSource(readSong(songObj), songObj, callbackObj,
+                                sourceLines, sourceSynced);
+                    } catch (Exception ignored) {
+                    }
                     invokeRender(callbackObj, songObj, lines, response);
                     Log.d(TAG, "fallback applied (" + queryUsed + ")");
                 } catch (Throwable t) {
@@ -1158,6 +1398,10 @@ public final class LrclibFallback {
                 }
             }
         });
+    }
+
+    private static boolean syncedIsEmpty(String synced) {
+        return synced == null || synced.trim().isEmpty();
     }
 
     private static Object buildResponse(Object songObj, String plain, String synced) {
@@ -1262,21 +1506,26 @@ public final class LrclibFallback {
             if (System.currentTimeMillis() - lastDialogMs < 2000) return;
             lastDialogMs = System.currentTimeMillis();
         }
-        final Object callback;
+        final Object callbackFromFallback;
         final Object original;
         final String query;
         final String source;
         final String plain;
         final String synced;
         synchronized (LrclibFallback.class) {
-            callback = lastCallback;
+            callbackFromFallback = lastCallback;
             original = lastOriginalResponse;
             query = lastQueryUsed;
             source = lastSource;
             plain = lastPlain;
             synced = lastSynced;
         }
-        if (song == null || callback == null) {
+        if (song == null) {
+            Toast.makeText(ctx, tr("no_fallback"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final Object callback = callbackForSong(song);
+        if (callback == null) {
             Toast.makeText(ctx, tr("no_fallback"), Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1296,9 +1545,11 @@ public final class LrclibFallback {
             Object mappedId = getFieldUp(song, "id");
             Object lastId = lastSong == null ? null : getFieldUp(lastSong, "id");
             fresh = mappedId != null && mappedId.equals(lastId)
+                    && callback == callbackFromFallback
                     && callback == lastCallback;
         } catch (Exception ignored) {
         }
+        final SourceSnapshot aiSource = translationSourceFor(song);
 
         LinearLayout layout = new LinearLayout(ctx);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -1318,6 +1569,12 @@ public final class LrclibFallback {
         final android.widget.Button searchBtn = new android.widget.Button(ctx);
         searchBtn.setText(tr("search"));
         layout.addView(searchBtn);
+        final android.widget.Button translateBtn;
+        if (aiSource != null) {
+            translateBtn = new android.widget.Button(ctx);
+            translateBtn.setText(tr("ai_translate"));
+            layout.addView(translateBtn);
+        } else translateBtn = null;
 
         AlertDialog.Builder b = new AlertDialog.Builder(ctx);
         b.setTitle(tr("dialog_title"));
@@ -1332,6 +1589,15 @@ public final class LrclibFallback {
         }
         final AlertDialog dialog = b.create();
         dialog.show();
+        if (translateBtn != null) {
+            translateBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dialog.dismiss();
+                    showOpenRouterDialog(v.getContext(), song);
+                }
+            });
+        }
         searchBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -1494,6 +1760,427 @@ public final class LrclibFallback {
                     renderOnMain(v.getContext(), song, callback, oPlain, null, "server", false);
                 }
             });
+        }
+    }
+
+    // ================= OpenRouter dual-line translation =================
+
+    private static final class OpenRouterSettings {
+        String apiKey = "";
+        String model = DEFAULT_OPENROUTER_MODEL;
+        String language = "English";
+    }
+
+    private static SharedPreferences translationPrefs(Context ctx) {
+        return ctx.getSharedPreferences(TRANSLATION_PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static OpenRouterSettings readOpenRouterSettings(Context ctx) {
+        OpenRouterSettings settings = new OpenRouterSettings();
+        try {
+            SharedPreferences p = translationPrefs(ctx);
+            settings.apiKey = p.getString("api_key", "");
+            settings.model = p.getString("model", DEFAULT_OPENROUTER_MODEL);
+            String defaultLanguage = "ar".equalsIgnoreCase(Locale.getDefault().getLanguage())
+                    ? "Arabic" : "English";
+            settings.language = p.getString("language", defaultLanguage);
+        } catch (Throwable t) {
+            Log.d(TAG, "OpenRouter settings read failed: " + t);
+        }
+        return settings;
+    }
+
+    private static void saveOpenRouterSettings(Context ctx, String apiKey,
+                                               String model, String language) {
+        translationPrefs(ctx).edit()
+                .putString("api_key", apiKey)
+                .putString("model", model)
+                .putString("language", language)
+                .apply();
+    }
+
+    private static void showOpenRouterDialog(final Context ctx, final Object song) {
+        final SourceSnapshot initialSource = translationSourceFor(song);
+        if (initialSource == null) {
+            Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        OpenRouterSettings settings = readOpenRouterSettings(ctx);
+        LinearLayout layout = new LinearLayout(ctx);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (16 * ctx.getResources().getDisplayMetrics().density);
+        layout.setPadding(pad, pad / 2, pad, 0);
+
+        TextView note = new TextView(ctx);
+        note.setText(tr("ai_note"));
+        note.setTypeface(null, Typeface.BOLD);
+        layout.addView(note);
+
+        final EditText keyEdit = new EditText(ctx);
+        keyEdit.setHint(tr("openrouter_key"));
+        keyEdit.setSingleLine(true);
+        keyEdit.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyEdit.setText(settings.apiKey);
+        layout.addView(keyEdit);
+
+        final EditText modelEdit = new EditText(ctx);
+        modelEdit.setHint(tr("model"));
+        modelEdit.setSingleLine(true);
+        modelEdit.setText(settings.model);
+        layout.addView(modelEdit);
+
+        final EditText languageEdit = new EditText(ctx);
+        languageEdit.setHint(tr("target_language"));
+        languageEdit.setSingleLine(true);
+        languageEdit.setText(settings.language);
+        layout.addView(languageEdit);
+
+        final AlertDialog dialog = new AlertDialog.Builder(ctx)
+                .setTitle(tr("ai_title"))
+                .setView(layout)
+                .setPositiveButton(tr("translate_now"), null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                final String apiKey = keyEdit.getText().toString().trim();
+                final String model = modelEdit.getText().toString().trim();
+                final String language = languageEdit.getText().toString().trim();
+                if (apiKey.isEmpty() || model.isEmpty() || language.isEmpty()) {
+                    Toast.makeText(ctx, tr("openrouter_config_required"),
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                final SourceSnapshot snapshot = translationSourceFor(song);
+                if (snapshot == null) {
+                    Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (!snapshot.songId.equals(initialSource.songId)
+                        || snapshot.lines.size() > MAX_TRANSLATION_LINES
+                        || sourceCharacterCount(snapshot.lines) > MAX_TRANSLATION_CHARS) {
+                    Toast.makeText(ctx, tr("translation_too_long"),
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                saveOpenRouterSettings(ctx, apiKey, model, language);
+                dialog.dismiss();
+                translateAndRender(ctx, song, snapshot, apiKey, model, language);
+            }
+        });
+    }
+
+    private static int sourceCharacterCount(List<Line> lines) {
+        int count = 0;
+        if (lines == null) return 0;
+        for (Line line : lines) {
+            if (line != null && line.text != null) {
+                count += line.text.length();
+                if (count > MAX_TRANSLATION_CHARS) return count;
+            }
+        }
+        return count;
+    }
+
+    private static void translateAndRender(final Context ctx, final Object song,
+                                           final SourceSnapshot snapshot,
+                                           final String apiKey, final String model,
+                                           final String language) {
+        if (snapshot.lines.isEmpty()) {
+            Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String cacheKey;
+        try {
+            cacheKey = translationCacheKey(snapshot, model, language);
+        } catch (Exception e) {
+            Toast.makeText(ctx, tr("translation_failed"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final ProgressDialog progress = new ProgressDialog(ctx);
+        progress.setMessage(tr("translating"));
+        progress.setCancelable(false);
+        progress.show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                List<String> translated = readTranslationCache(ctx, cacheKey,
+                        snapshot.lines.size());
+                String failure = null;
+                if (translated == null) {
+                    try {
+                        translated = requestOpenRouterTranslation(apiKey, model,
+                                language, snapshot.lines);
+                        writeTranslationCache(ctx, cacheKey, translated);
+                    } catch (Throwable t) {
+                        failure = t.getMessage();
+                        Log.d(TAG, "OpenRouter translation failed: " + t);
+                    }
+                }
+                final List<String> result = translated;
+                final String error = failure;
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (progress.isShowing()) progress.dismiss();
+                        } catch (Throwable ignored) {
+                        }
+                        if (error != null || result == null) {
+                            String message = tr("translation_failed");
+                            if (error != null && !error.trim().isEmpty()) {
+                                message += ": " + error;
+                            }
+                            Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        SourceSnapshot current = translationSourceFor(song);
+                        if (current == null || !current.songId.equals(snapshot.songId)
+                                || !sameSourceLines(current.lines, snapshot.lines)) {
+                            Toast.makeText(ctx, tr("source_changed"),
+                                    Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        renderDualLines(song, current.callback, snapshot, result);
+                        Toast.makeText(ctx, tr("translation_done"),
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private static boolean sameSourceLines(List<Line> a, List<Line> b) {
+        if (a == null || b == null || a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            Line left = a.get(i);
+            Line right = b.get(i);
+            if (left.ms != right.ms || !String.valueOf(left.text).equals(String.valueOf(right.text))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String translationCacheKey(SourceSnapshot source, String model,
+                                              String language) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        digest.update((model + "\n" + language + "\n" + source.synced + "\n")
+                .getBytes("UTF-8"));
+        for (Line line : source.lines) {
+            digest.update(String.valueOf(line.ms).getBytes("UTF-8"));
+            digest.update((byte) 0);
+            digest.update(String.valueOf(line.text).getBytes("UTF-8"));
+            digest.update((byte) 10);
+        }
+        byte[] bytes = digest.digest();
+        StringBuilder hex = new StringBuilder("translation_");
+        for (byte value : bytes) hex.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        return hex.toString();
+    }
+
+    private static List<String> readTranslationCache(Context ctx, String key, int count) {
+        try {
+            String raw = translationPrefs(ctx).getString(key, null);
+            if (raw == null) return null;
+            JSONArray array = new JSONArray(raw);
+            if (array.length() != count) return null;
+            List<String> out = new ArrayList<String>();
+            for (int i = 0; i < array.length(); i++) {
+                Object value = array.opt(i);
+                if (!(value instanceof String)) return null;
+                out.add((String) value);
+            }
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static void writeTranslationCache(Context ctx, String key,
+                                              List<String> translated) {
+        try {
+            JSONArray array = new JSONArray();
+            for (String line : translated) array.put(line);
+            translationPrefs(ctx).edit().putString(key, array.toString()).apply();
+        } catch (Throwable t) {
+            Log.d(TAG, "translation cache write failed: " + t);
+        }
+    }
+
+    private static List<String> requestOpenRouterTranslation(String apiKey,
+                                                              String model,
+                                                              String language,
+                                                              List<Line> source)
+            throws Exception {
+        JSONArray inputLines = new JSONArray();
+        for (Line line : source) inputLines.put(line.text == null ? "" : line.text);
+        JSONObject request = new JSONObject();
+        request.put("model", model);
+        request.put("temperature", 0.2);
+        JSONArray messages = new JSONArray();
+        messages.put(new JSONObject()
+                .put("role", "system")
+                .put("content", "You translate song lyrics accurately and naturally. "
+                        + "Keep each input line separate, preserve its meaning and tone, "
+                        + "and do not add explanations."));
+        messages.put(new JSONObject()
+                .put("role", "user")
+                .put("content", "Translate every line into " + language + ". Return only "
+                        + "a JSON object with a string array named translations. The array "
+                        + "must have exactly " + source.size() + " entries in the same order. "
+                        + "Do not merge, split, omit, or add lines. Keep an empty input line "
+                        + "empty.\nInput lines:\n" + inputLines.toString()));
+        request.put("messages", messages);
+
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(OPENROUTER_URL).openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+            connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("HTTP-Referer",
+                    "https://github.com/mohamedamrnady/anghami-patches");
+            connection.setRequestProperty("X-Title", "Anghami AI Lyrics Translation");
+            connection.setConnectTimeout(HTTP_TIMEOUT_MS);
+            connection.setReadTimeout(TRANSLATION_TIMEOUT_MS);
+            java.io.OutputStream out = connection.getOutputStream();
+            out.write(request.toString().getBytes("UTF-8"));
+            out.flush();
+            out.close();
+
+            int status = connection.getResponseCode();
+            InputStream stream = status >= 200 && status < 300
+                    ? connection.getInputStream() : connection.getErrorStream();
+            String body = readUtf8(stream);
+            if (status < 200 || status >= 300) {
+                String detail = "HTTP " + status;
+                try {
+                    JSONObject error = new JSONObject(body).optJSONObject("error");
+                    if (error != null) detail += ": " + error.optString("message", "");
+                } catch (Exception ignored) {
+                }
+                throw new Exception(detail);
+            }
+            return parseOpenRouterTranslations(body, source.size());
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static String readUtf8(InputStream input) throws Exception {
+        if (input == null) return "";
+        BufferedReader reader = new BufferedReader(new InputStreamReader(input, "UTF-8"));
+        StringBuilder text = new StringBuilder();
+        String line;
+        try {
+            while ((line = reader.readLine()) != null) text.append(line);
+        } finally {
+            reader.close();
+        }
+        return text.toString();
+    }
+
+    private static List<String> parseOpenRouterTranslations(String body, int expected)
+            throws Exception {
+        JSONObject root = new JSONObject(body);
+        JSONArray choices = root.optJSONArray("choices");
+        if (choices == null || choices.length() == 0) {
+            throw new Exception("OpenRouter returned no choices");
+        }
+        JSONObject message = choices.optJSONObject(0).optJSONObject("message");
+        if (message == null) throw new Exception("OpenRouter returned an empty response");
+        Object contentValue = message.opt("content");
+        String content;
+        if (contentValue instanceof String) {
+            content = ((String) contentValue).trim();
+        } else if (contentValue instanceof JSONArray) {
+            StringBuilder combined = new StringBuilder();
+            JSONArray parts = (JSONArray) contentValue;
+            for (int i = 0; i < parts.length(); i++) {
+                JSONObject part = parts.optJSONObject(i);
+                if (part != null) combined.append(part.optString("text", ""));
+            }
+            content = combined.toString().trim();
+        } else {
+            throw new Exception("OpenRouter returned unsupported content");
+        }
+        if (content.startsWith("```")) {
+            content = content.replaceFirst("^```(?:json)?\\s*", "")
+                    .replaceFirst("\\s*```$", "").trim();
+        }
+        JSONArray translated;
+        if (content.startsWith("[")) {
+            translated = new JSONArray(content);
+        } else {
+            translated = new JSONObject(content).optJSONArray("translations");
+        }
+        if (translated == null || translated.length() != expected) {
+            throw new Exception("Model returned a different number of lines");
+        }
+        List<String> out = new ArrayList<String>();
+        for (int i = 0; i < translated.length(); i++) {
+            Object value = translated.opt(i);
+            if (!(value instanceof String)) {
+                throw new Exception("Model returned a non-text lyric line");
+            }
+            out.add((String) value);
+        }
+        return out;
+    }
+
+    private static void renderDualLines(Object song, Object callback,
+                                        SourceSnapshot source,
+                                        List<String> translated) {
+        try {
+            if (source.lines.size() != translated.size()) return;
+            Class<?> lineClass = Class.forName("com.anghami.ghost.pojo.LyricsLine");
+            List<Object> displayLines = new ArrayList<Object>();
+            StringBuilder unsynced = new StringBuilder();
+            int previousMs = -1;
+            for (int i = 0; i < source.lines.size(); i++) {
+                Line original = source.lines.get(i);
+                String translation = translated.get(i) == null ? "" : translated.get(i);
+                String text = original.text == null ? "" : original.text;
+                String dual = translation.trim().isEmpty()
+                        ? text : text + "\n" + translation;
+                Object line = lineClass.newInstance();
+                setLineField(line, "line", dual);
+                setLineField(line, "milliseconds", original.ms);
+                setLineField(line, "id", i);
+                setLineField(line, "isActive", !source.synced
+                        || i == 0 || previousMs < original.ms);
+                previousMs = original.ms;
+                displayLines.add(line);
+                if (unsynced.length() > 0) unsynced.append('\n');
+                unsynced.append(dual);
+            }
+
+            Class<?> responseClass =
+                    Class.forName("com.anghami.ghost.api.response.LyricsResponse");
+            Object response = responseClass.newInstance();
+            try {
+                setLineField(response, "songId", getFieldUp(song, "id"));
+                setLineField(response, "truncated", false);
+                setLineField(response, "isSynced", source.synced);
+                if (source.synced) {
+                    setLineField(response, "lyricsSynced", displayLines);
+                    setLineField(response, "lyricsUnsynced", null);
+                } else {
+                    setLineField(response, "lyricsSynced", null);
+                    setLineField(response, "lyricsUnsynced", unsynced.toString());
+                }
+            } catch (Exception ignored) {
+            }
+            invokeRender(callback, song, displayLines, response);
+            Log.d(TAG, "OpenRouter dual-line translation rendered");
+        } catch (Throwable t) {
+            Log.d(TAG, "dual-line render failed: " + t);
         }
     }
 }

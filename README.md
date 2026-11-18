@@ -66,6 +66,21 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 Fingerprints pin 8.0.28 method shapes — re-verify them against a fresh decode
 before using these patches on any other app version.
 
+### AI lyrics translation via OpenRouter
+
+Enable **AI lyrics translation · OpenRouter** in Morphe. It includes the
+lyrics-options long-press and LRCLIB fallback patches it depends on. With
+lyrics loaded, long-press the player’s play/pause button and choose **AI
+translate lyrics · OpenRouter**. Enter an OpenRouter API key, model ID, and
+target language; the default model is `openai/gpt-4o-mini`, and the default
+language is Arabic on Arabic-locale devices or English otherwise.
+
+The original lyrics remain intact. Each translation is displayed beneath its
+source line, using the source line’s timestamp for synchronized lyrics.
+Settings, the API key, and cached translations are stored in app-private
+preferences; uncached lyrics are sent to OpenRouter only when translation is
+requested.
+
 ### 🛠️ Building locally
 
 - Run `./gradlew buildAndroid`
