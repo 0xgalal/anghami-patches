@@ -13,7 +13,7 @@ fails after patching.
 
 ### How to use these patches
 
-Click here to add these patches to Morphe: https://morphe.software/add-source?github=mohamedamrnady/anghami-patches
+Click here to add these patches to Morphe: https://morphe.software/add-source?github=0xgalal/anghami-patches
 
 Then in Morphe Manager (Expert Mode): pick the stock `the-stock-apk` + matching
 `arm64_v8a` + dpi splits (or a merged APK), select the patches below, and install.
