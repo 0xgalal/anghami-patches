@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-19T07:37:23",
-  "description": "## [1.6.2](https://github.com/0xgalal/anghami-patches/compare/v1.6.1...v1.6.2) (2026-11-19)\n\n### 🐛 Bug Fixes\n\n* stop skip-limit similar-song fallback ([#8](https://github.com/0xgalal/anghami-patches/issues/8)) ([064d5f1](https://github.com/0xgalal/anghami-patches/commit/064d5f1ac5eea258cd8be04eabe4f6b2e8fe6e20))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.6.2/patches-1.6.2.mpp",
+  "created_at": "2026-11-19T08:12:55",
+  "description": "## [1.7.0](https://github.com/0xgalal/anghami-patches/compare/v1.6.2...v1.7.0) (2026-11-19)\n\n### ✨ New Features\n\n* fetch free OpenRouter models dynamically ([#9](https://github.com/0xgalal/anghami-patches/issues/9)) ([489ffb0](https://github.com/0xgalal/anghami-patches/commit/489ffb0d6a9837469120304a0b52dc17630d40de))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.7.0/patches-1.7.0.mpp",
   "signature_download_url": "",
-  "version": "1.6.2"
+  "version": "1.7.0"
 }

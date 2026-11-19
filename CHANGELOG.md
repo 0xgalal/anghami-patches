@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/0xgalal/anghami-patches/compare/v1.6.2...v1.7.0) (2026-11-19)
+
+### ✨ New Features
+
+* fetch free OpenRouter models dynamically ([#9](https://github.com/0xgalal/anghami-patches/issues/9)) ([489ffb0](https://github.com/0xgalal/anghami-patches/commit/489ffb0d6a9837469120304a0b52dc17630d40de))
+
 ## [1.6.2](https://github.com/0xgalal/anghami-patches/compare/v1.6.1...v1.6.2) (2026-11-19)
 
 ### 🐛 Bug Fixes
