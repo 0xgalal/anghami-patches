@@ -94,8 +94,8 @@ public class TranslationProviderTest {
         List<TranslationProvider.Model> models = TranslationProvider.XKIRO.parseModels(
                 new JSONObject().put("object", "list").put("data", data).toString());
         assertEquals(Arrays.asList(
-                "cohere/command-a-translate", "google/gemini-3.6-flash",
-                "openai/gpt-5.6-luna", "vendor/comped-paid-tier",
+                "cohere/command-a-translate", "vendor/comped-paid-tier",
+                "google/gemini-3.6-flash", "openai/gpt-5.6-luna",
                 "mistralai/mistral-small-2603"), ids(models));
         assertTrue(models.get(0).displayName().contains("Command A Translate"));
         assertTrue(models.get(0).displayName().endsWith("FREE"));

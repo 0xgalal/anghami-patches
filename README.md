@@ -92,13 +92,17 @@ need an eligible plan or a real deposit.
 The default target language is Arabic on Arabic-locale devices or English
 otherwise. Enabling auto-translate
 turns on Lyrics mode and translates lyrics as they load, with no per-song
-Translate action. Predominantly Arabic-script lyrics are skipped.
+Translate action. The original is held while translation runs, then the
+original and translation appear together. Predominantly Arabic-script lyrics
+are skipped.
 **Settings > Lyrics** remains available for manual lyrics actions.
 
 The original lyrics remain intact. Each translation is displayed beneath its
 source line, using the source line’s timestamp for synchronized lyrics.
 The full lyric is translated together as context, and the result is checked
-for one aligned translation per source line.
+for one aligned translation per source line. The model is instructed to return
+only a JSON object with a `lines` array, preserving empty lines and the exact
+source line count.
 The auto-translation choice, provider, API keys, models, target language, optional extra
 system prompt, and cached translations are stored in app-private preferences.
 Translations are cached by lyric, provider, model, target language, and system prompt;

@@ -28,6 +28,8 @@ public class TranslationRequestTest {
     private static final List<Connection> connections = new ArrayList<Connection>();
     private static Method request;
     private static Method parseLyrics;
+    private static Method parsePlainLyrics;
+    private static Method isTranslationSourceResult;
 
     @BeforeClass
     public static void interceptHttpRequests() throws Exception {
@@ -46,6 +48,11 @@ public class TranslationRequestTest {
         request.setAccessible(true);
         parseLyrics = LrclibFallback.class.getDeclaredMethod("parseLrc", String.class);
         parseLyrics.setAccessible(true);
+        parsePlainLyrics = LrclibFallback.class.getDeclaredMethod("plainLines", String.class);
+        parsePlainLyrics.setAccessible(true);
+        isTranslationSourceResult = LrclibFallback.class.getDeclaredMethod(
+                "isTranslationSourceResult", String.class);
+        isTranslationSourceResult.setAccessible(true);
     }
 
     @Before
@@ -106,8 +113,27 @@ public class TranslationRequestTest {
             JSONObject body = connection.requestBody();
             assertEquals(provider.defaultModel, body.getString("model"));
             assertFalse(body.getBoolean("stream"));
-            assertTrue(body.getJSONArray("messages").getJSONObject(1)
-                    .getString("content").contains("Hello"));
+            JSONArray messages = body.getJSONArray("messages");
+            String systemPrompt = messages.getJSONObject(0).getString("content");
+            String userPrompt = messages.getJSONObject(1).getString("content");
+            assertTrue(systemPrompt.startsWith("You are a precise lyrics translation assistant."));
+            assertTrue(systemPrompt.contains("Output ONLY the JSON object: "
+                    + "{\"lines\": [\"line1\", \"line2\", \"line3\"]}"));
+            assertTrue(systemPrompt.contains("EXACTLY 1 items"));
+            assertTrue(systemPrompt.contains("If uncertain, provide your best possible translation."));
+            assertFalse(systemPrompt.contains("{lineCount}"));
+            assertTrue(userPrompt.contains("Return exactly 1 output lines"));
+            assertTrue(userPrompt.contains("string array named `lines`"));
+            assertTrue(userPrompt.contains("{\"lines\":[\"Hello\"]}"));
+            if (provider != TranslationProvider.XKIRO) {
+                JSONObject schema = body.getJSONObject("response_format")
+                        .getJSONObject("json_schema").getJSONObject("schema");
+                JSONObject lineSchema = schema.getJSONObject("properties")
+                        .getJSONObject("lines");
+                assertEquals(1, lineSchema.getInt("minItems"));
+                assertEquals(1, lineSchema.getInt("maxItems"));
+                assertEquals("lines", schema.getJSONArray("required").getString(0));
+            }
             if (provider == TranslationProvider.OPENCODE) {
                 assertNotNull(connection.getRequestProperty("x-opencode-session"));
                 assertNull(connection.getRequestProperty("HTTP-Referer"));
@@ -186,6 +212,80 @@ public class TranslationRequestTest {
         assertEquals(1, connections.size());
     }
 
+    @Test
+    public void requestKeepsEmptyLinesAndRequiresExactSourceCount() throws Exception {
+        List<?> source = (List<?>) parsePlainLyrics.invoke(null, "Hello\n\nWorld");
+        responses.add(new Response(200, success("Bonjour", "", "Monde")));
+        @SuppressWarnings("unchecked")
+        List<String> translated = (List<String>) request.invoke(null,
+                TranslationProvider.OPENROUTER, "test-key",
+                TranslationProvider.OPENROUTER.defaultModel, null, "French", "", source);
+
+        assertEquals(Arrays.asList("Bonjour", "", "Monde"), translated);
+        JSONObject body = connections.get(0).requestBody();
+        String systemPrompt = body.getJSONArray("messages").getJSONObject(0)
+                .getString("content");
+        String userPrompt = body.getJSONArray("messages").getJSONObject(1)
+                .getString("content");
+        assertTrue(systemPrompt.contains("EXACTLY 3 items"));
+        assertFalse(systemPrompt.contains("{lineCount}"));
+        assertTrue(userPrompt.contains("{\"lines\":[\"Hello\",\"\",\"World\"]}"));
+        JSONObject lineSchema = body.getJSONObject("response_format")
+                .getJSONObject("json_schema").getJSONObject("schema")
+                .getJSONObject("properties").getJSONObject("lines");
+        assertEquals(3, lineSchema.getInt("minItems"));
+        assertEquals(3, lineSchema.getInt("maxItems"));
+    }
+
+    @Test
+    public void dialogShowsStrictDefaultPromptAndKeepsAdditionalInstructions() throws Exception {
+        Method forDialog = LrclibFallback.class.getDeclaredMethod(
+                "systemPromptForDialog", String.class);
+        Method fromDialog = LrclibFallback.class.getDeclaredMethod(
+                "customSystemPromptFromDialog", String.class);
+        forDialog.setAccessible(true);
+        fromDialog.setAccessible(true);
+
+        String defaultPrompt = (String) forDialog.invoke(null, "");
+        assertTrue(defaultPrompt.contains("EXACTLY {lineCount} items"));
+        assertEquals("", fromDialog.invoke(null, defaultPrompt));
+
+        String custom = "Keep the translation conversational.";
+        String editable = (String) forDialog.invoke(null, custom);
+        assertTrue(editable.contains("Additional user instructions:\n" + custom));
+        assertEquals(custom, fromDialog.invoke(null, editable));
+    }
+
+    @Test
+    public void statusAndTeaserRowsAreNotTreatedAsLyricsToTranslate() throws Exception {
+        assertFalse((Boolean) isTranslationSourceResult.invoke(null, "placeholder"));
+        assertFalse((Boolean) isTranslationSourceResult.invoke(null, "no-result"));
+        assertFalse((Boolean) isTranslationSourceResult.invoke(null, "teaser-guide"));
+        assertTrue((Boolean) isTranslationSourceResult.invoke(null, "lrclib-title"));
+    }
+
+    @Test
+    public void parserRejectsResponsesThatDoNotUseLinesObject() throws Exception {
+        String legacyContent = new JSONObject()
+                .put("translations", new JSONArray().put("Bonjour")).toString();
+        responses.add(new Response(200, completionWithContent(legacyContent)));
+        Exception error = assertThrows(Exception.class,
+                () -> translate(TranslationProvider.XKIRO, "test-key"));
+        assertEquals("Model returned a different number of lines", error.getMessage());
+    }
+
+    @Test
+    public void parserRejectsExtraKeysAndMarkdownWrappedJson() throws Exception {
+        String extraKey = new JSONObject().put("lines", new JSONArray().put("Bonjour"))
+                .put("note", "Here is the translation").toString();
+        responses.add(new Response(200, completionWithContent(extraKey)));
+        assertThrows(Exception.class, () -> translate(TranslationProvider.XKIRO, "test-key"));
+
+        responses.add(new Response(200, completionWithContent(
+                "```json\n{\"lines\":[\"Bonjour\"]}\n```")));
+        assertThrows(Exception.class, () -> translate(TranslationProvider.XKIRO, "test-key"));
+    }
+
     private static List<?> translate(TranslationProvider provider, String key) throws Exception {
         try {
             return (List<?>) request.invoke(null, provider, key, provider.defaultModel,
@@ -198,8 +298,12 @@ public class TranslationRequestTest {
     }
 
     private static String success(String... lines) throws Exception {
-        String content = new JSONObject().put("translations", new JSONArray(Arrays.asList(lines)))
+        String content = new JSONObject().put("lines", new JSONArray(Arrays.asList(lines)))
                 .toString();
+        return completionWithContent(content);
+    }
+
+    private static String completionWithContent(String content) throws Exception {
         return new JSONObject().put("choices", new JSONArray().put(new JSONObject()
                 .put("finish_reason", "stop")
                 .put("message", new JSONObject().put("content", content)))).toString();
