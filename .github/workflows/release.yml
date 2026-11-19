@@ -67,6 +67,7 @@ jobs:
         if: inputs.recover_tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RECOVER_TAG: ${{ inputs.recover_tag }}
         run: |
           set -euo pipefail
