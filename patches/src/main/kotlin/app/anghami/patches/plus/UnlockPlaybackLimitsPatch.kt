@@ -7,9 +7,11 @@ import app.anghami.patches.shared.Constants.COMPATIBILITY_ANGHAMI_8_0_28
 /**
  * Disables client-side playback limits.
  *
- * - PlayQueue.skipLimitReached / queueRestrictionsEnabled -> false
- * - PlayQueue.getDisableSkipLimit / getDisableQueueRestrictions /
- *   getDisablePlayerRestrictions -> true
+     * - PlayQueue.skipLimitReached / queueRestrictionsEnabled -> false
+     * - PlayQueueManager.skipLimitReached -> false (also prevents the song API
+     *   from being told the client reached its skip limit)
+     * - PlayQueue.getDisableSkipLimit / getDisableQueueRestrictions /
+     *   getDisablePlayerRestrictions -> true
  * - ProtoAccount.getEnablePlayerRestrictions -> false
  *
  * Local gates only; stream authorization stays server-side.
@@ -23,6 +25,13 @@ val unlockPlaybackLimitsPatch = bytecodePatch(
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
 
     execute {
+        ManagerSkipLimitReachedFingerprint.method.addInstructions(
+            0,
+            """
+                const/4 v0, 0x0
+                return v0
+            """
+        )
         SkipLimitReachedFingerprint.method.addInstructions(
             0,
             """

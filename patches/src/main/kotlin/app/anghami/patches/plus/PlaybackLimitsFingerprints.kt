@@ -28,6 +28,20 @@ object SkipLimitReachedFingerprint : Fingerprint(
     )
 )
 
+object ManagerSkipLimitReachedFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/odin/playqueue/PlayQueueManager;",
+    name = "skipLimitReached",
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.STATIC),
+    returnType = "Z",
+    parameters = listOf(),
+    filters = listOf(
+        methodCall(
+            definingClass = "Lcom/anghami/odin/playqueue/PlayQueue;",
+            name = "skipLimitReached",
+        ),
+    )
+)
+
 object QueueRestrictionsEnabledFingerprint : Fingerprint(
     definingClass = "Lcom/anghami/odin/playqueue/PlayQueue;",
     name = "queueRestrictionsEnabled",
