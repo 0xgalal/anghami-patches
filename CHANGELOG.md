@@ -1,3 +1,9 @@
+## [1.10.3](https://github.com/0xgalal/anghami-patches/compare/v1.10.2...v1.10.3) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* show LRCLIB lyrics immediately and restore options dialog ([e036197](https://github.com/0xgalal/anghami-patches/commit/e036197850f041f7581f5c59cb0da29bb388733e))
+
 ## [1.10.2](https://github.com/0xgalal/anghami-patches/compare/v1.10.1...v1.10.2) (2026-11-19)
 
 ### 🐛 Bug Fixes
