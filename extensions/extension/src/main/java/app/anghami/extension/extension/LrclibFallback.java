@@ -1,5 +1,6 @@
 package app.anghami.extension.extension;
 
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
@@ -22,6 +23,7 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
@@ -32,6 +34,7 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -53,8 +56,8 @@ import java.util.regex.Pattern;
  *   so native saveLyrics keeps refusing them.
  * - {@link #paintCached} (from the lyrics-view load) paints cached lyrics
  *   instantly without waiting for the DB/API round-trip.
- * - {@link #showLyricsOptions} (from the play/pause long-press) opens the
- *   options dialog for the current song.
+ * - {@link #showSettingsLyricsOptions} opens the options dialog for the
+ *   current song from Anghami Settings.
  *
  * All app classes are touched via reflection: the extension compiles
  * without the app on the classpath. Any failure is caught and logged;
@@ -97,8 +100,12 @@ public final class LrclibFallback {
     private static String lastSynced;
     private static boolean lastPreferSynced = true;
     private static long lastDialogMs;
+    private static volatile WeakReference<Activity> settingsActivity =
+            new WeakReference<Activity>(null);
     private static final java.util.WeakHashMap<Object, String> renderedKeys =
             new java.util.WeakHashMap<Object, String>();
+    private static final Map<String, WeakReference<Object>> lyricsCallbacks =
+            new LinkedHashMap<String, WeakReference<Object>>();
     private static String translationSongId = "";
     private static Object translationSong;
     private static Object translationCallback;
@@ -158,7 +165,7 @@ public final class LrclibFallback {
     }
 
     /**
-     * Records the song-bound render callback for the long-press options.
+     * Records the song-bound render callback for the Settings options.
      * This runs for native full-lyrics responses too, which the LRCLIB
      * fallback intentionally leaves untouched.
      */
@@ -170,9 +177,103 @@ public final class LrclibFallback {
             synchronized (LrclibFallback.class) {
                 lastSong = songObj;
                 lastCallback = callbackObj;
+                lyricsCallbacks.put(songKey(song),
+                        new WeakReference<Object>(callbackObj));
+                while (lyricsCallbacks.size() > 16) {
+                    String oldest = lyricsCallbacks.keySet().iterator().next();
+                    lyricsCallbacks.remove(oldest);
+                }
             }
         } catch (Throwable t) {
             Log.d(TAG, "rememberLyricsTarget failed: " + t);
+        }
+    }
+
+    /** Stores the themed Activity used by the Settings Compose screen. */
+    public static void rememberSettingsActivity(Object activityObj) {
+        if (activityObj instanceof Activity) {
+            settingsActivity = new WeakReference<Activity>((Activity) activityObj);
+        }
+    }
+
+    /**
+     * Adds the synthetic Lyrics row to the Settings page model. LIVE_RADIO is
+     * an unused native row ID reserved as the click sentinel; the click hook
+     * intercepts it before Anghami's Settings router sees it.
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static void addLyricsSettingsRow(Object rowsObj) {
+        try {
+            if (!(rowsObj instanceof List)) return;
+            List rows = (List) rowsObj;
+            int insertAt = rows.size();
+            for (int i = 0; i < rows.size(); i++) {
+                Object row = rows.get(i);
+                Object rowId = settingsRowIdOf(row);
+                if (rowId != null && "LIVE_RADIO".equals(enumName(rowId))) return;
+                if (rowId != null && "MUSIC".equals(enumName(rowId))) {
+                    insertAt = i + 1;
+                } else if (insertAt == rows.size()
+                        && row != null && row.getClass().getName().endsWith("$Version")) {
+                    insertAt = i;
+                }
+            }
+
+            Class<?> rowIdClass =
+                    Class.forName("com.anghami.model.pojo.settings.SettingsRowId");
+            Object sentinel = rowIdClass.getField("LIVE_RADIO").get(null);
+            Class<?> subtitleClass =
+                    Class.forName("com.anghami.model.pojo.settings.SubtitleText");
+            Class<?> pageRowClass = Class.forName(
+                    "com.anghami.model.pojo.settings.SettingsRow$ItemRow$PageRow");
+            Object row = pageRowClass.getConstructor(
+                            Integer.TYPE, rowIdClass, subtitleClass, Boolean.TYPE, Integer.TYPE)
+                    .newInstance(0x7f130382, sentinel, null, true, 0x7f080810);
+            rows.add(Math.max(0, Math.min(insertAt, rows.size())), row);
+        } catch (Throwable t) {
+            Log.d(TAG, "addLyricsSettingsRow failed: " + t);
+        }
+    }
+
+    /**
+     * Replacement for the stock PageRow click lambda. It intercepts our
+     * sentinel and faithfully delegates all regular row IDs to the original
+     * callback, without adding branchy smali to the Compose click path.
+     */
+    public static void handleSettingsPageRowClick(Object clickLambda) {
+        try {
+            if (clickLambda == null) return;
+            Object row = getFieldUp(clickLambda, "b");
+            Object rowId = settingsRowIdOf(row);
+            if (rowId != null && "LIVE_RADIO".equals(enumName(rowId))) {
+                showSettingsLyricsOptions();
+                return;
+            }
+            Object callback = getFieldUp(clickLambda, "a");
+            if (callback == null) return;
+            Method invoke = callback.getClass().getMethod("invoke", Object.class);
+            invoke.setAccessible(true);
+            invoke.invoke(callback, rowId);
+        } catch (Throwable t) {
+            Log.d(TAG, "handleSettingsPageRowClick failed: " + t);
+        }
+    }
+
+    private static Object settingsRowIdOf(Object row) {
+        try {
+            if (row == null) return null;
+            Method getter = row.getClass().getMethod("getSettingsRowId");
+            return getter.invoke(row);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String enumName(Object value) {
+        try {
+            return value instanceof Enum ? ((Enum<?>) value).name() : String.valueOf(value);
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
@@ -300,7 +401,7 @@ public final class LrclibFallback {
                 if (hit.miss) {
                     Log.d(TAG, "negative cache hit for songId=" + song.id);
                     // Still guide the user: the server view alone (teaser
-                    // or empty) never mentions the long-press options.
+                    // or empty) never mentions the Settings options.
                     // Full native responses returned above, so this is a
                     // truncated teaser or nothing — safe to own the screen.
                     if (serverEmpty) {
@@ -351,7 +452,7 @@ public final class LrclibFallback {
                         } else {
                             // Server holds a (truncated) teaser but LRCLIB
                             // has nothing: keep the teaser visible and
-                            // append the long-press guide. The unlock
+                            // append the Settings guide. The unlock
                             // button is a native no-op (A5/t.onClick
                             // returns void), so the guide is the only way
                             // to the manual search.
@@ -369,27 +470,13 @@ public final class LrclibFallback {
         }
     }
 
-    /** Play/pause long-press entry: replaces the native sleep-timer sheet
-     * (see the long-press patch) with the lyrics options for the current
-     * song. Runs on the main thread (long-click dispatch). Never crashes
-     * the host; toasts when nothing is loaded yet.
-     */
-    public static void showLyricsOptions(Object fragmentObj) {
+    /** Opens lyrics options for the currently playing song from Settings. */
+    public static void showSettingsLyricsOptions() {
         try {
-            if (fragmentObj == null) return;
-            Context ctx = null;
-            try {
-                Method m = fragmentObj.getClass().getMethod("getActivity");
-                Object a = m.invoke(fragmentObj);
-                if (a instanceof Context) ctx = (Context) a;
-            } catch (Exception ignored) {
-            }
+            WeakReference<Activity> ref = settingsActivity;
+            Activity ctx = ref == null ? null : ref.get();
             if (ctx == null) return;
-            // Prefer the PlayerFragment's current song so a prefetched
-            // next-track response cannot redirect the dialog. The queue and
-            // last rendered song are fallbacks for fragment/API variations.
-            Object song = currentSongFromFragment(fragmentObj);
-            if (song == null) song = currentPlayingSong();
+            Object song = currentPlayingSong();
             if (song == null) {
                 synchronized (LrclibFallback.class) {
                     song = lastSong;
@@ -401,27 +488,8 @@ public final class LrclibFallback {
             }
             showOptionsForSong(ctx, song);
         } catch (Throwable t) {
-            Log.d(TAG, "showLyricsOptions failed: " + t);
+            Log.d(TAG, "showSettingsLyricsOptions failed: " + t);
         }
-    }
-
-    /** Reads the player fragment's own current Song before consulting the queue. */
-    private static Object currentSongFromFragment(Object fragmentObj) {
-        try {
-            for (Class<?> type = fragmentObj.getClass();
-                 type != null && type != Object.class; type = type.getSuperclass()) {
-                try {
-                    Method method = type.getDeclaredMethod("I0");
-                    method.setAccessible(true);
-                    Object song = method.invoke(fragmentObj);
-                    if (song != null) return song;
-                } catch (NoSuchMethodException ignored) {
-                }
-            }
-        } catch (Throwable t) {
-            Log.d(TAG, "currentSongFromFragment failed: " + t);
-        }
-        return null;
     }
 
     /** Currently playing song, or null. Reflection-only, never throws. */
@@ -577,7 +645,7 @@ public final class LrclibFallback {
 
     /**
      * LRCLIB miss while the server holds a (truncated) teaser: re-render
-     * the teaser with the long-press guide appended, so the user can
+     * the teaser with the Settings guide appended, so the user can
      * still reach the manual search. Plain path only.
      */
     private static void renderTeaserWithGuide(Context ctx, Object songObj,
@@ -765,6 +833,10 @@ public final class LrclibFallback {
             if (song == null) return null;
             String wantedId = songKey(song);
             synchronized (LrclibFallback.class) {
+                WeakReference<Object> reference = lyricsCallbacks.get(wantedId);
+                Object remembered = reference == null ? null : reference.get();
+                if (remembered != null) return remembered;
+                if (reference != null) lyricsCallbacks.remove(wantedId);
                 if (lastCallback != null && lastSong != null) {
                     SongInfo last = readSong(lastSong);
                     if (last != null && wantedId.equals(songKey(last))) return lastCallback;
@@ -869,14 +941,14 @@ public final class LrclibFallback {
         boolean fr = "fr".equalsIgnoreCase(lang);
 
         if ("no_result".equals(key)) {
-            if (ar) return "لم يتم العثور على كلمات.\nاضغط مطولاً على زر التشغيل للبحث يدوياً.";
-            if (fr) return "Paroles introuvables.\nAppui long sur le bouton lecture pour chercher manuellement.";
-            return "No lyrics found.\nLong-press the play button to search manually.";
+            if (ar) return "لم يتم العثور على كلمات.\nافتح الإعدادات > الكلمات للبحث يدويًا.";
+            if (fr) return "Paroles introuvables.\nOuvrez Paramètres > Paroles pour les rechercher manuellement.";
+            return "No lyrics found.\nOpen Settings > Lyrics to search manually.";
         }
         if ("guide_teaser".equals(key)) {
-            if (ar) return "اضغط مطولاً على زر التشغيل لخيارات الكلمات.";
-            if (fr) return "Appui long sur le bouton lecture pour les options des paroles.";
-            return "Long-press the play button for lyrics options.";
+            if (ar) return "افتح الإعدادات > الكلمات لخيارات الكلمات.";
+            if (fr) return "Ouvrez Paramètres > Paroles pour les options des paroles.";
+            return "Open Settings > Lyrics for lyrics options.";
         }
         if ("searching".equals(key)) {
             if (ar) return "جارٍ البحث في LRCLIB…";
@@ -1639,9 +1711,9 @@ public final class LrclibFallback {
         }
         // Freshness: the last-render globals (source/query/plain/synced/
         // original) may belong to a different (pre-cached/next) song than
-        // the long-pressed one. The artist/title fields are always filled
-        // from the mapped song; the synced/plain toggle and server-version
-        // restore are only offered when the globals match this song.
+        // the song currently selected in Settings. The artist/title fields
+        // are always filled from the mapped song; the synced/plain toggle
+        // and server-version restore are offered only when globals match.
         boolean fresh = false;
         try {
             Object mappedId = getFieldUp(song, "id");
