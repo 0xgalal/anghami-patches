@@ -1,3 +1,9 @@
+## [1.3.2](https://github.com/0xgalal/anghami-patches/compare/v1.3.1...v1.3.2) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* point Morphe source at fork ([0cb54be](https://github.com/0xgalal/anghami-patches/commit/0cb54be3adbfc43b2b26c1834d30201ae33467f1))
+
 ## [1.3.0](https://github.com/mohamedamrnady/anghami-patches/compare/v1.2.0...v1.3.0) (2026-10-06)
 
 ### 🐛 Bug Fixes
