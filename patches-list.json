@@ -1,10 +1,10 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter",
-      "description": "Adds opt-in OpenRouter translation beneath original lyrics, preserving each line's timestamp. Configure API key, model, and target language from the lyrics options.",
+      "description": "Translates the full lyric with context, validates line alignment, and displays each translation beneath its original at the source timestamp. Configure OpenRouter in the lyrics options.",
       "default": false,
       "category": null,
       "dependencies": [

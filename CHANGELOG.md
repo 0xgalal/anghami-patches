@@ -1,3 +1,9 @@
+## [1.3.3](https://github.com/0xgalal/anghami-patches/compare/v1.3.2...v1.3.3) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* improve OpenRouter lyrics translation ([752f189](https://github.com/0xgalal/anghami-patches/commit/752f189b84a3d3044d746e369475f463acd8013e))
+
 ## [1.3.2](https://github.com/0xgalal/anghami-patches/compare/v1.3.1...v1.3.2) (2026-11-19)
 
 ### 🐛 Bug Fixes
