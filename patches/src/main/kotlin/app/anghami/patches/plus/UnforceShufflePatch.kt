@@ -31,6 +31,11 @@ import com.android.tools.smali.dexlib2.iface.reference.FieldReference
  * 4. Shuffle upsell dialog disarm: RadioPlayQueue.shouldShowShuffleMessage()
  *    (the only true override; base is false) is forced false, so
  *    maybeShowShuffleMessage() can never pop the free-user shuffle dialog.
+ * 5. Client-reported skip-limit fallback: playlist/album song requests set
+ *    `skiplimitreached=1` through PlayQueueManager.skipLimitReached(), which
+ *    makes the server return similar songs instead of the requested song.
+ *    This patch depends on Unlock Playback Limits, which forces that helper
+ *    false as well as the underlying per-queue checks.
  *
  * Deliberately NOT hooked: `PlayQueue.shuffle()`V. The v1 no-op is not
  * restored because the "Header Play + Shuffle" patch routes its Shuffle
@@ -72,10 +77,11 @@ import com.android.tools.smali.dexlib2.iface.reference.FieldReference
 @Suppress("unused")
 val unforceShufflePatch = bytecodePatch(
     name = "Unforce shuffle",
-    description = "Forces server shuffleOn=false at both sync points, never reports shuffle to the server, disables the pick-a-song radio redirect, enables shuffle buttons, and disarms the shuffle upsell dialog. Manual shuffle toggle and the header Shuffle button keep working.",
+    description = "Forces server shuffleOn=false, blocks client-reported skip-limit similar-song fallback, disables the pick-a-song radio redirect, and enables shuffle buttons without breaking manual or header Shuffle.",
     default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
+    dependsOn(unlockPlaybackLimitsPatch)
 
     execute {
         // Replace the single `iget-boolean <reg>, ...;->shuffleOn:Z` with
