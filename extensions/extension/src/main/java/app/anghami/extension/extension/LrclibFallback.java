@@ -4,17 +4,22 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -80,7 +85,18 @@ public final class LrclibFallback {
     private static final String TRANSLATION_PREFS = "lyrics_openrouter";
     private static final String OPENROUTER_URL =
             "https://openrouter.ai/api/v1/chat/completions";
-    private static final String DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini";
+    private static final String DEFAULT_OPENROUTER_MODEL =
+            "inception/mercury-2.5-preview";
+    private static final String[] OPENROUTER_MODELS = {
+            "inception/mercury-2.5-preview",
+            "meta/muse-spark-1.3",
+            "z-ai/glm-5.3-flash",
+            "qwen/qwen3.8-flash",
+            "~deepseek/deepseek-v4-flash-latest",
+            "~openai/gpt-mini-latest",
+            "openai/gpt-oss-120b",
+            "~google/gemini-flash-latest",
+    };
     private static final long POS_TTL_MS = 30L * 24 * 3600 * 1000;
     private static final long NEG_TTL_MS = 7L * 24 * 3600 * 1000;
     private static final int MAX_ENTRIES = 500;
@@ -227,61 +243,7 @@ public final class LrclibFallback {
     private static void showAutoTranslationDialog(final Context ctx,
                                                   final Object fragmentObj) {
         try {
-            final OpenRouterSettings settings = readOpenRouterSettings(ctx);
-            LinearLayout layout = new LinearLayout(ctx);
-            layout.setOrientation(LinearLayout.VERTICAL);
-            int pad = (int) (16 * ctx.getResources().getDisplayMetrics().density);
-            layout.setPadding(pad, pad / 2, pad, 0);
-
-            TextView note = new TextView(ctx);
-            note.setText(tr("auto_translate_note"));
-            layout.addView(note);
-
-            final CheckBox enabled = new CheckBox(ctx);
-            enabled.setText(tr("auto_translate_toggle"));
-            enabled.setChecked(settings.autoTranslate);
-            layout.addView(enabled);
-
-            final AlertDialog dialog = new AlertDialog.Builder(ctx)
-                    .setTitle(tr("auto_translate_title"))
-                    .setView(layout)
-                    .setPositiveButton(android.R.string.ok, null)
-                    .setNeutralButton(tr("configure_openrouter"), null)
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .create();
-            dialog.show();
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                    .setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View view) {
-                            final boolean turnOn = enabled.isChecked();
-                            OpenRouterSettings current = readOpenRouterSettings(ctx);
-                            if (turnOn && current.apiKey.trim().isEmpty()) {
-                                dialog.dismiss();
-                                showOpenRouterDialog(ctx, null, true, fragmentObj);
-                                return;
-                            }
-                            setAutoTranslationEnabled(ctx, turnOn);
-                            dialog.dismiss();
-                            Toast.makeText(ctx, tr(turnOn
-                                            ? "auto_translate_enabled"
-                                            : "auto_translate_disabled"),
-                                    Toast.LENGTH_SHORT).show();
-                            if (turnOn) {
-                                ensureLyricsMode(fragmentObj);
-                                Object song = currentSongFromPlayer(fragmentObj);
-                                if (song != null) autoTranslateIfEnabled(ctx, song);
-                            }
-                        }
-                    });
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
-                    .setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View view) {
-                            dialog.dismiss();
-                            showOpenRouterDialog(ctx, null, false, fragmentObj);
-                        }
-                    });
+            showOpenRouterDialog(ctx, null, fragmentObj, true);
         } catch (Throwable t) {
             Log.d(TAG, "showAutoTranslationDialog failed: " + t);
         }
@@ -1184,9 +1146,9 @@ public final class LrclibFallback {
             return "AI translate lyrics · OpenRouter";
         }
         if ("ai_title".equals(key)) {
-            if (ar) return "ترجمة الكلمات · OpenRouter";
-            if (fr) return "Traduction des paroles · OpenRouter";
-            return "AI lyrics translation · OpenRouter";
+            if (ar) return "ترجمة الكلمات بالذكاء الاصطناعي";
+            if (fr) return "Traduction des paroles par IA";
+            return "AI lyrics translation";
         }
         if ("ai_note".equals(key)) {
             if (ar) return "ستظهر الترجمة أسفل كل سطر أصلي مع الحفاظ على التوقيت.";
@@ -1233,6 +1195,104 @@ public final class LrclibFallback {
             if (fr) return "Paramètres OpenRouter enregistrés";
             return "OpenRouter settings saved";
         }
+        if ("provider_section".equals(key)) {
+            if (ar) return "موفّر الخدمة";
+            if (fr) return "Fournisseur";
+            return "Provider";
+        }
+        if ("provider".equals(key)) {
+            if (ar) return "الموفّر";
+            if (fr) return "Fournisseur";
+            return "Provider";
+        }
+        if ("provider_openrouter".equals(key)) {
+            return "OpenRouter";
+        }
+        if ("model_label".equals(key)) {
+            if (ar) return "النموذج";
+            if (fr) return "Modèle";
+            return "Model";
+        }
+        if ("api_credentials".equals(key)) {
+            if (ar) return "بيانات API";
+            if (fr) return "Identifiants API";
+            return "API credentials";
+        }
+        if ("api_key_label".equals(key)) {
+            if (ar) return "مفتاح API";
+            if (fr) return "Clé API";
+            return "API key";
+        }
+        if ("translation_mode_section".equals(key)) {
+            if (ar) return "وضع الترجمة";
+            if (fr) return "Mode de traduction";
+            return "Translation mode";
+        }
+        if ("translation_mode".equals(key)) {
+            if (ar) return "وضع الترجمة";
+            if (fr) return "Mode de traduction";
+            return "Translation mode";
+        }
+        if ("translation_mode_translation".equals(key)) {
+            if (ar) return "ترجمة";
+            if (fr) return "Traduction";
+            return "Translation";
+        }
+        if ("system_prompt".equals(key)) {
+            if (ar) return "تعليمات النظام";
+            if (fr) return "Prompt système";
+            return "System prompt";
+        }
+        if ("system_prompt_default".equals(key)) {
+            if (ar) return "افتراضي";
+            if (fr) return "Par défaut";
+            return "Default";
+        }
+        if ("system_prompt_custom".equals(key)) {
+            if (ar) return "مخصص";
+            if (fr) return "Personnalisé";
+            return "Custom";
+        }
+        if ("model_custom".equals(key)) {
+            if (ar) return "مخصص";
+            if (fr) return "Personnalisé";
+            return "Custom";
+        }
+        if ("model_selector_title".equals(key)) {
+            if (ar) return "اختر نموذجاً";
+            if (fr) return "Choisir un modèle";
+            return "Select model";
+        }
+        if ("edit_model".equals(key)) {
+            if (ar) return "معرّف نموذج مخصص";
+            if (fr) return "Identifiant de modèle personnalisé";
+            return "Custom model ID";
+        }
+        if ("edit_api_key".equals(key)) {
+            if (ar) return "أدخل مفتاح API";
+            if (fr) return "Saisissez la clé API";
+            return "Enter API key";
+        }
+        if ("edit_target_language".equals(key)) {
+            if (ar) return "أدخل لغة الترجمة";
+            if (fr) return "Saisissez la langue cible";
+            return "Enter target language";
+        }
+        if ("edit_system_prompt".equals(key)) {
+            if (ar) return "تعليمات إضافية للنموذج";
+            if (fr) return "Instructions supplémentaires pour le modèle";
+            return "Additional instructions for the model";
+        }
+        if ("not_configured".equals(key)) {
+            if (ar) return "غير مُعدّ";
+            if (fr) return "Non configurée";
+            return "Not configured";
+        }
+        if ("arabic_source_skipped".equals(key)) {
+            if (ar) return "تم تخطي الكلمات العربية";
+            if (fr) return "Paroles en arabe ignorées";
+            return "Arabic-script lyrics are skipped";
+        }
         if ("openrouter_key".equals(key)) {
             if (ar) return "مفتاح OpenRouter API";
             if (fr) return "Clé API OpenRouter";
@@ -1247,6 +1307,11 @@ public final class LrclibFallback {
             if (ar) return "لغة الترجمة";
             if (fr) return "Langue cible";
             return "Target language";
+        }
+        if ("custom_prompt_hint".equals(key)) {
+            if (ar) return "اتركه فارغاً لاستخدام التعليمات الافتراضية";
+            if (fr) return "Laissez vide pour utiliser les instructions par défaut";
+            return "Leave blank to use the default instructions";
         }
         if ("translate_now".equals(key)) {
             if (ar) return "ترجمة الآن";
@@ -2121,6 +2186,7 @@ public final class LrclibFallback {
         String apiKey = "";
         String model = DEFAULT_OPENROUTER_MODEL;
         String language = "English";
+        String systemPrompt = "";
         boolean autoTranslate;
     }
 
@@ -2132,11 +2198,16 @@ public final class LrclibFallback {
         OpenRouterSettings settings = new OpenRouterSettings();
         try {
             SharedPreferences p = translationPrefs(ctx);
-            settings.apiKey = p.getString("api_key", "");
-            settings.model = p.getString("model", DEFAULT_OPENROUTER_MODEL);
+            String apiKey = p.getString("api_key", "");
+            String model = p.getString("model", DEFAULT_OPENROUTER_MODEL);
             String defaultLanguage = "ar".equalsIgnoreCase(Locale.getDefault().getLanguage())
                     ? "Arabic" : "English";
-            settings.language = p.getString("language", defaultLanguage);
+            String language = p.getString("language", defaultLanguage);
+            String systemPrompt = p.getString("system_prompt", "");
+            settings.apiKey = apiKey == null ? "" : apiKey;
+            settings.model = model == null ? DEFAULT_OPENROUTER_MODEL : model;
+            settings.language = language == null ? defaultLanguage : language;
+            settings.systemPrompt = systemPrompt == null ? "" : systemPrompt;
             settings.autoTranslate = p.getBoolean("auto_translate", false);
         } catch (Throwable t) {
             Log.d(TAG, "OpenRouter settings read failed: " + t);
@@ -2145,21 +2216,23 @@ public final class LrclibFallback {
     }
 
     private static void saveOpenRouterSettings(Context ctx, String apiKey,
-                                               String model, String language) {
+                                               String model, String language,
+                                               String systemPrompt) {
         translationPrefs(ctx).edit()
                 .putString("api_key", apiKey)
                 .putString("model", model)
                 .putString("language", language)
+                .putString("system_prompt", systemPrompt)
                 .apply();
     }
 
     private static void showOpenRouterDialog(final Context ctx, final Object song) {
-        showOpenRouterDialog(ctx, song, false, null);
+        showOpenRouterDialog(ctx, song, null, false);
     }
 
     private static void showOpenRouterDialog(final Context ctx, final Object song,
-                                             final boolean enableAutoOnSave,
-                                             final Object fragmentObj) {
+                                             final Object fragmentObj,
+                                             final boolean includeAutoToggle) {
         final boolean configOnly = song == null;
         final SourceSnapshot initialSource =
                 configOnly ? null : translationSourceFor(song);
@@ -2167,40 +2240,120 @@ public final class LrclibFallback {
             Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
             return;
         }
-        OpenRouterSettings settings = readOpenRouterSettings(ctx);
-        LinearLayout layout = new LinearLayout(ctx);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (16 * ctx.getResources().getDisplayMetrics().density);
-        layout.setPadding(pad, pad / 2, pad, 0);
+        final OpenRouterSettings settings = readOpenRouterSettings(ctx);
+        final String[] apiKey = {settings.apiKey};
+        final String[] model = {settings.model};
+        final String[] language = {settings.language};
+        final String[] systemPrompt = {settings.systemPrompt};
 
-        TextView note = new TextView(ctx);
-        note.setText(tr("ai_note"));
-        note.setTypeface(null, Typeface.BOLD);
-        layout.addView(note);
+        LinearLayout rows = new LinearLayout(ctx);
+        rows.setOrientation(LinearLayout.VERTICAL);
+        int horizontalPad = dp(ctx, 20);
+        rows.setPadding(horizontalPad, dp(ctx, 4), horizontalPad, dp(ctx, 12));
 
-        final EditText keyEdit = new EditText(ctx);
-        keyEdit.setHint(tr("openrouter_key"));
-        keyEdit.setSingleLine(true);
-        keyEdit.setInputType(android.text.InputType.TYPE_CLASS_TEXT
-                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        keyEdit.setText(settings.apiKey);
-        layout.addView(keyEdit);
+        ScrollView scroll = new ScrollView(ctx);
+        scroll.setFillViewport(false);
+        scroll.addView(rows, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        final EditText modelEdit = new EditText(ctx);
-        modelEdit.setHint(tr("model"));
-        modelEdit.setSingleLine(true);
-        modelEdit.setText(settings.model);
-        layout.addView(modelEdit);
+        final CheckBox autoTranslateToggle;
+        if (includeAutoToggle) {
+            addSettingsSection(ctx, rows, tr("auto_translate_title"));
+            autoTranslateToggle = new CheckBox(ctx);
+            autoTranslateToggle.setText(tr("auto_translate_toggle"));
+            autoTranslateToggle.setChecked(settings.autoTranslate);
+            rows.addView(autoTranslateToggle, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            TextView autoNote = new TextView(ctx);
+            autoNote.setText(tr("auto_translate_note"));
+            autoNote.setTextColor(Color.rgb(166, 172, 181));
+            autoNote.setTextSize(13);
+            autoNote.setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 12));
+            rows.addView(autoNote, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        } else {
+            autoTranslateToggle = null;
+        }
 
-        final EditText languageEdit = new EditText(ctx);
-        languageEdit.setHint(tr("target_language"));
-        languageEdit.setSingleLine(true);
-        languageEdit.setText(settings.language);
-        layout.addView(languageEdit);
+        addSettingsSection(ctx, rows, tr("provider_section"));
+        addSettingsRow(ctx, rows, tr("provider"), tr("provider_openrouter"), null);
+
+        addSettingsSection(ctx, rows, tr("api_credentials"));
+        addSettingsRow(ctx, rows, tr("api_key_label"), maskedApiKey(apiKey[0]), new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showTextSettingDialog(ctx, tr("edit_api_key"), apiKey[0],
+                        android.text.InputType.TYPE_CLASS_TEXT
+                                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD,
+                        false, new TextSettingListener() {
+                            @Override
+                            public void onValueChanged(String value) {
+                                apiKey[0] = value;
+                                refreshSettingsSummary(view, tr("api_key_label"),
+                                        maskedApiKey(value));
+                            }
+                        });
+            }
+        });
+        addSettingsRow(ctx, rows, tr("model_label"), model[0], new View.OnClickListener() {
+            @Override
+            public void onClick(final View view) {
+                showModelSelector(ctx, model[0], new ModelSelectionListener() {
+                    @Override
+                    public void onModelSelected(String value) {
+                        model[0] = value;
+                        refreshSettingsSummary(view, tr("model_label"), value);
+                    }
+                });
+            }
+        });
+
+        addSettingsSection(ctx, rows, tr("translation_mode_section"));
+        addSettingsRow(ctx, rows, tr("translation_mode"),
+                tr("translation_mode_translation"), null);
+        addSettingsRow(ctx, rows, tr("system_prompt"),
+                systemPrompt[0].trim().isEmpty()
+                        ? tr("system_prompt_default") : tr("system_prompt_custom"),
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(final View view) {
+                        showTextSettingDialog(ctx, tr("edit_system_prompt"), systemPrompt[0],
+                                android.text.InputType.TYPE_CLASS_TEXT
+                                        | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                                        | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
+                                true, new TextSettingListener() {
+                                    @Override
+                                    public void onValueChanged(String value) {
+                                        systemPrompt[0] = value;
+                                        refreshSettingsSummary(view, tr("system_prompt"),
+                                                value.trim().isEmpty()
+                                                        ? tr("system_prompt_default")
+                                                        : tr("system_prompt_custom"));
+                                    }
+                                });
+                    }
+                });
+        addSettingsRow(ctx, rows, tr("target_language"), language[0],
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(final View view) {
+                        showTextSettingDialog(ctx, tr("edit_target_language"), language[0],
+                                android.text.InputType.TYPE_CLASS_TEXT
+                                        | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
+                                false, new TextSettingListener() {
+                                    @Override
+                                    public void onValueChanged(String value) {
+                                        language[0] = value;
+                                        refreshSettingsSummary(view, tr("target_language"), value);
+                                    }
+                                });
+                    }
+                });
 
         final AlertDialog dialog = new AlertDialog.Builder(ctx)
                 .setTitle(tr("ai_title"))
-                .setView(layout)
+                .setView(scroll)
                 .setPositiveButton(tr(configOnly ? "save_settings" : "translate_now"), null)
                 .setNegativeButton(android.R.string.cancel, null)
                 .create();
@@ -2208,18 +2361,27 @@ public final class LrclibFallback {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                final String apiKey = keyEdit.getText().toString().trim();
-                final String model = modelEdit.getText().toString().trim();
-                final String language = languageEdit.getText().toString().trim();
-                if (apiKey.isEmpty() || model.isEmpty() || language.isEmpty()) {
+                final String apiKeyValue = trimOrEmpty(apiKey[0]);
+                final String modelValue = trimOrEmpty(model[0]);
+                final String languageValue = trimOrEmpty(language[0]);
+                final String systemPromptValue = trimOrEmpty(systemPrompt[0]);
+                final boolean autoTranslateEnabled = includeAutoToggle
+                        ? autoTranslateToggle.isChecked() : settings.autoTranslate;
+                boolean requiresApiKey = !configOnly || autoTranslateEnabled;
+                if ((requiresApiKey && apiKeyValue.isEmpty())
+                        || modelValue.isEmpty() || languageValue.isEmpty()) {
                     Toast.makeText(ctx, tr("openrouter_config_required"),
                             Toast.LENGTH_SHORT).show();
                     return;
                 }
-                saveOpenRouterSettings(ctx, apiKey, model, language);
+                saveOpenRouterSettings(ctx, apiKeyValue, modelValue, languageValue,
+                        systemPromptValue);
                 if (configOnly) {
                     dialog.dismiss();
-                    if (enableAutoOnSave || settings.autoTranslate) {
+                    if (includeAutoToggle) {
+                        setAutoTranslationEnabled(ctx, autoTranslateEnabled);
+                    }
+                    if (autoTranslateEnabled) {
                         setAutoTranslationEnabled(ctx, true);
                         Object activeFragment = fragmentObj != null
                                 ? fragmentObj
@@ -2228,6 +2390,9 @@ public final class LrclibFallback {
                         Object activeSong = currentSongFromPlayer(activeFragment);
                         if (activeSong != null) autoTranslateIfEnabled(ctx, activeSong);
                         Toast.makeText(ctx, tr("auto_translate_enabled"),
+                                Toast.LENGTH_SHORT).show();
+                    } else if (includeAutoToggle) {
+                        Toast.makeText(ctx, tr("auto_translate_disabled"),
                                 Toast.LENGTH_SHORT).show();
                     } else {
                         Toast.makeText(ctx, tr("settings_saved"),
@@ -2248,9 +2413,180 @@ public final class LrclibFallback {
                     return;
                 }
                 dialog.dismiss();
-                translateAndRender(ctx, song, snapshot, apiKey, model, language);
+                translateAndRender(ctx, song, snapshot, apiKeyValue, modelValue,
+                        languageValue, systemPromptValue);
             }
         });
+    }
+
+    private static String trimOrEmpty(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private interface TextSettingListener {
+        void onValueChanged(String value);
+    }
+
+    private interface ModelSelectionListener {
+        void onModelSelected(String model);
+    }
+
+    private static int dp(Context ctx, int value) {
+        return (int) (value * ctx.getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private static void addSettingsSection(Context ctx, LinearLayout parent, String title) {
+        TextView heading = new TextView(ctx);
+        heading.setText(title);
+        heading.setTextColor(Color.rgb(177, 203, 232));
+        heading.setTextSize(14);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setPadding(0, dp(ctx, 16), 0, dp(ctx, 8));
+        parent.addView(heading, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private static TextView addSettingsRow(Context ctx, LinearLayout parent,
+                                           String title, String summary,
+                                           View.OnClickListener listener) {
+        LinearLayout card = new LinearLayout(ctx);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(ctx, 20), dp(ctx, 15), dp(ctx, 20), dp(ctx, 15));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(20, 22, 25));
+        background.setCornerRadius(dp(ctx, 20));
+        card.setBackground(background);
+
+        TextView titleView = new TextView(ctx);
+        titleView.setText(title);
+        titleView.setTextColor(Color.rgb(235, 238, 243));
+        titleView.setTextSize(16);
+        titleView.setTypeface(null, Typeface.BOLD);
+        card.addView(titleView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView summaryView = new TextView(ctx);
+        summaryView.setText(summary);
+        summaryView.setTextColor(Color.rgb(166, 172, 181));
+        summaryView.setTextSize(14);
+        LinearLayout.LayoutParams summaryParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        summaryParams.topMargin = dp(ctx, 4);
+        card.addView(summaryView, summaryParams);
+
+        if (listener != null) {
+            card.setClickable(true);
+            card.setFocusable(true);
+            card.setOnClickListener(listener);
+        }
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardParams.bottomMargin = dp(ctx, 6);
+        parent.addView(card, cardParams);
+        return summaryView;
+    }
+
+    private static void refreshSettingsSummary(View row, String title, String summary) {
+        if (!(row instanceof LinearLayout)) return;
+        LinearLayout card = (LinearLayout) row;
+        if (card.getChildCount() < 2 || !(card.getChildAt(0) instanceof TextView)
+                || !(card.getChildAt(1) instanceof TextView)) return;
+        ((TextView) card.getChildAt(0)).setText(title);
+        ((TextView) card.getChildAt(1)).setText(summary);
+    }
+
+    private static String maskedApiKey(String apiKey) {
+        return apiKey == null || apiKey.trim().isEmpty()
+                ? tr("not_configured") : "••••••••";
+    }
+
+    private static void showTextSettingDialog(Context ctx, String title, String initial,
+                                              int inputType, boolean multiline,
+                                              final TextSettingListener listener) {
+        final EditText input = new EditText(ctx);
+        input.setInputType(inputType);
+        input.setText(initial == null ? "" : initial);
+        input.setHint(multiline ? tr("custom_prompt_hint") : title);
+        if (multiline) {
+            input.setGravity(Gravity.TOP | Gravity.START);
+            input.setMinLines(3);
+            input.setMaxLines(6);
+        } else {
+            input.setSingleLine(true);
+        }
+        int pad = dp(ctx, 20);
+        LinearLayout container = new LinearLayout(ctx);
+        container.setPadding(pad, 0, pad, 0);
+        container.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        AlertDialog editor = new AlertDialog.Builder(ctx)
+                .setTitle(title)
+                .setView(container)
+                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        editor.show();
+        editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                listener.onValueChanged(input.getText().toString().trim());
+                editor.dismiss();
+            }
+        });
+        if (!multiline) {
+            input.requestFocus();
+        }
+    }
+
+    private static void showModelSelector(final Context ctx, final String currentModel,
+                                          final ModelSelectionListener listener) {
+        final String[] choices = new String[OPENROUTER_MODELS.length + 1];
+        System.arraycopy(OPENROUTER_MODELS, 0, choices, 0, OPENROUTER_MODELS.length);
+        choices[OPENROUTER_MODELS.length] = tr("model_custom");
+        int selected = modelIndex(currentModel);
+        final AlertDialog selector = new AlertDialog.Builder(ctx)
+                .setTitle(tr("model_selector_title"))
+                .setSingleChoiceItems(choices, selected, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which < OPENROUTER_MODELS.length) {
+                            listener.onModelSelected(OPENROUTER_MODELS[which]);
+                            dialog.dismiss();
+                            return;
+                        }
+                        dialog.dismiss();
+                        String customInitial = modelIndex(currentModel) == OPENROUTER_MODELS.length
+                                ? currentModel : "";
+                        showTextSettingDialog(ctx, tr("edit_model"), customInitial,
+                                android.text.InputType.TYPE_CLASS_TEXT
+                                        | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+                                false, new TextSettingListener() {
+                                    @Override
+                                    public void onValueChanged(String value) {
+                                        if (value.trim().isEmpty()) {
+                                            Toast.makeText(ctx, tr("openrouter_config_required"),
+                                                    Toast.LENGTH_SHORT).show();
+                                        } else {
+                                            listener.onModelSelected(value.trim());
+                                        }
+                                    }
+                                });
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        selector.show();
+    }
+
+    private static int modelIndex(String model) {
+        if (model != null) {
+            for (int i = 0; i < OPENROUTER_MODELS.length; i++) {
+                if (OPENROUTER_MODELS[i].equals(model)) return i;
+            }
+        }
+        return OPENROUTER_MODELS.length;
     }
 
     private static int sourceCharacterCount(List<Line> lines) {
@@ -2265,6 +2601,26 @@ public final class LrclibFallback {
         return count;
     }
 
+    private static boolean isArabicScriptSource(List<Line> lines) {
+        int arabicLetters = 0;
+        int allLetters = 0;
+        if (lines == null) return false;
+        for (Line line : lines) {
+            if (line == null || line.text == null) continue;
+            for (int offset = 0; offset < line.text.length();) {
+                int codePoint = line.text.codePointAt(offset);
+                offset += Character.charCount(codePoint);
+                if (!Character.isLetter(codePoint)) continue;
+                allLetters++;
+                if (Character.UnicodeScript.of(codePoint)
+                        == Character.UnicodeScript.ARABIC) {
+                    arabicLetters++;
+                }
+            }
+        }
+        return arabicLetters >= 3 && arabicLetters * 2 >= allLetters;
+    }
+
     private static void autoTranslateIfEnabled(final Context ctx, final Object song) {
         try {
             if (ctx == null || song == null) return;
@@ -2274,6 +2630,7 @@ public final class LrclibFallback {
                     || settings.language.trim().isEmpty()) return;
             final SourceSnapshot snapshot = translationSourceFor(song);
             if (snapshot == null || snapshot.lines.isEmpty()
+                    || isArabicScriptSource(snapshot.lines)
                     || snapshot.lines.size() > MAX_TRANSLATION_LINES
                     || sourceCharacterCount(snapshot.lines) > MAX_TRANSLATION_CHARS) {
                 return;
@@ -2289,7 +2646,7 @@ public final class LrclibFallback {
                     if (latest == null || !latest.songId.equals(snapshot.songId)
                             || !sameSourceLines(latest.lines, snapshot.lines)) return;
                     translateAndRender(ctx, song, latest, current.apiKey,
-                            current.model, current.language, false);
+                            current.model, current.language, current.systemPrompt, false);
                 }
             });
         } catch (Throwable t) {
@@ -2301,13 +2658,23 @@ public final class LrclibFallback {
                                            final SourceSnapshot snapshot,
                                            final String apiKey, final String model,
                                            final String language) {
-        translateAndRender(ctx, song, snapshot, apiKey, model, language, true);
+        translateAndRender(ctx, song, snapshot, apiKey, model, language, "", true);
     }
 
     private static void translateAndRender(final Context ctx, final Object song,
                                            final SourceSnapshot snapshot,
                                            final String apiKey, final String model,
                                            final String language,
+                                           final String systemPrompt) {
+        translateAndRender(ctx, song, snapshot, apiKey, model, language,
+                systemPrompt, true);
+    }
+
+    private static void translateAndRender(final Context ctx, final Object song,
+                                           final SourceSnapshot snapshot,
+                                           final String apiKey, final String model,
+                                           final String language,
+                                           final String systemPrompt,
                                            final boolean interactive) {
         if (snapshot.lines.isEmpty()) {
             if (interactive) {
@@ -2315,9 +2682,16 @@ public final class LrclibFallback {
             }
             return;
         }
+        if (isArabicScriptSource(snapshot.lines)) {
+            if (interactive) {
+                Toast.makeText(ctx, tr("arabic_source_skipped"),
+                        Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
         final String cacheKey;
         try {
-            cacheKey = translationCacheKey(snapshot, model, language);
+            cacheKey = translationCacheKey(snapshot, model, language, systemPrompt);
         } catch (Exception e) {
             Toast.makeText(ctx, tr("translation_failed"), Toast.LENGTH_SHORT).show();
             return;
@@ -2352,7 +2726,7 @@ public final class LrclibFallback {
                 if (translated == null) {
                     try {
                         translated = requestOpenRouterTranslation(apiKey, model,
-                                language, snapshot.lines);
+                                language, systemPrompt, snapshot.lines);
                         writeTranslationCache(ctx, cacheKey, translated);
                     } catch (Throwable t) {
                         failure = t.getMessage();
@@ -2415,10 +2789,14 @@ public final class LrclibFallback {
     }
 
     private static String translationCacheKey(SourceSnapshot source, String model,
-                                              String language) throws Exception {
+                                              String language, String systemPrompt)
+            throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        digest.update((model + "\n" + language + "\n" + source.synced + "\n")
-                .getBytes("UTF-8"));
+        String cacheHeader = model + "\n" + language + "\n" + source.synced + "\n";
+        if (systemPrompt != null && !systemPrompt.trim().isEmpty()) {
+            cacheHeader += systemPrompt.trim() + "\n";
+        }
+        digest.update(cacheHeader.getBytes("UTF-8"));
         for (Line line : source.lines) {
             digest.update(String.valueOf(line.ms).getBytes("UTF-8"));
             digest.update((byte) 0);
@@ -2463,6 +2841,7 @@ public final class LrclibFallback {
     private static List<String> requestOpenRouterTranslation(String apiKey,
                                                               String model,
                                                               String language,
+                                                              String systemPrompt,
                                                               List<Line> source)
             throws Exception {
         JSONArray inputLines = new JSONArray();
@@ -2470,20 +2849,24 @@ public final class LrclibFallback {
         JSONObject request = new JSONObject();
         request.put("model", model);
         request.put("temperature", 0.1);
+        String systemInstructions = "You are a lyrics localization engine. Read all supplied "
+                + "lines together as one song and use their context to resolve "
+                + "pronouns, idioms, references, tone, and ambiguity.";
+        if (systemPrompt != null && !systemPrompt.trim().isEmpty()) {
+            systemInstructions += "\n\nAdditional user instructions:\n"
+                    + systemPrompt.trim();
+        }
+        systemInstructions += " Return only JSON matching the requested schema. Do not explain, "
+                + "think aloud, use markdown, merge lines, split lines, or add notes. Return "
+                + "exactly " + source.size() + " strings in `translations`, preserving input "
+                + "order. Empty input lines must stay empty. Make translations natural for "
+                + "music listening while staying faithful to meaning, tense, names, punctuation, "
+                + "and repeated hooks. Preserve text already in the target language verbatim, "
+                + "including target-language parts of mixed lines.";
         JSONArray messages = new JSONArray();
         messages.put(new JSONObject()
                 .put("role", "system")
-                .put("content", "You are a lyrics localization engine. Read all supplied "
-                        + "lines together as one song and use their context to resolve "
-                        + "pronouns, idioms, references, tone, and ambiguity. Return only "
-                        + "JSON matching the requested schema. Do not explain, think aloud, "
-                        + "use markdown, merge lines, split lines, or add notes. Return "
-                        + "exactly " + source.size() + " strings in `translations`, "
-                        + "preserving input order. Empty input lines must stay empty. Make "
-                        + "translations natural for music listening while staying faithful "
-                        + "to meaning, tense, names, punctuation, and repeated hooks. "
-                        + "Preserve text already in the target language verbatim, including "
-                        + "target-language parts of mixed lines."));
+                .put("content", systemInstructions));
         messages.put(new JSONObject()
                 .put("role", "user")
                 .put("content", "Translate the `lines` JSON array into " + language
