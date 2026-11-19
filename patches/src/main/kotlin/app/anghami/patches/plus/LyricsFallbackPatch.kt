@@ -92,12 +92,14 @@ val lyricsFallbackPatch = bytecodePatch(
         // Truncated suppression at the render choke point (`A7/E.b`
         // entry): a cached LRCLIB result rewrites the truncated/empty
         // response in place before native renders it, so the teaser is
-        // never shown on first open or revisit. Branch-free prepend
-        // (v0-v2 dead at entry of this static method); all decisions
-        // live in the helper, misses are no-ops.
+        // never shown on first open or revisit. Also retain the render
+        // callback for the long-press options even when native full lyrics
+        // make the LRCLIB helper return early. Branch-free prepend (v0-v2
+        // dead at entry of this static method); decisions live in helpers.
         LyricsSuccessFingerprint.method.addInstructions(
             0,
             """
+                invoke-static {p0, p3}, $FALLBACK_HELPER->rememberLyricsTarget(Ljava/lang/Object;Ljava/lang/Object;)V
                 move-object v0, p0
                 move-object v1, p1
                 move-object v2, p3

@@ -158,6 +158,25 @@ public final class LrclibFallback {
     }
 
     /**
+     * Records the song-bound render callback for the long-press options.
+     * This runs for native full-lyrics responses too, which the LRCLIB
+     * fallback intentionally leaves untouched.
+     */
+    public static void rememberLyricsTarget(Object songObj, Object callbackObj) {
+        try {
+            if (songObj == null || callbackObj == null) return;
+            SongInfo song = readSong(songObj);
+            if (song == null) return;
+            synchronized (LrclibFallback.class) {
+                lastSong = songObj;
+                lastCallback = callbackObj;
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "rememberLyricsTarget failed: " + t);
+        }
+    }
+
+    /**
      * Hides the dead "Unlock full lyrics" teaser control from the current
      * lyrics view. Runs after the current render frame so native binding
      * cannot immediately make the button visible again.
@@ -366,11 +385,11 @@ public final class LrclibFallback {
             } catch (Exception ignored) {
             }
             if (ctx == null) return;
-            // The dialog edits the CURRENTLY PLAYING song — not the last
-            // lyrics request (pre-cached/next-track responses overwrite
-            // lastSong while another song plays). PlayQueueManager is the
-            // source of truth; lastSong is only the fallback.
-            Object song = currentPlayingSong();
+            // Prefer the PlayerFragment's current song so a prefetched
+            // next-track response cannot redirect the dialog. The queue and
+            // last rendered song are fallbacks for fragment/API variations.
+            Object song = currentSongFromFragment(fragmentObj);
+            if (song == null) song = currentPlayingSong();
             if (song == null) {
                 synchronized (LrclibFallback.class) {
                     song = lastSong;
@@ -384,6 +403,25 @@ public final class LrclibFallback {
         } catch (Throwable t) {
             Log.d(TAG, "showLyricsOptions failed: " + t);
         }
+    }
+
+    /** Reads the player fragment's own current Song before consulting the queue. */
+    private static Object currentSongFromFragment(Object fragmentObj) {
+        try {
+            for (Class<?> type = fragmentObj.getClass();
+                 type != null && type != Object.class; type = type.getSuperclass()) {
+                try {
+                    Method method = type.getDeclaredMethod("I0");
+                    method.setAccessible(true);
+                    Object song = method.invoke(fragmentObj);
+                    if (song != null) return song;
+                } catch (NoSuchMethodException ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "currentSongFromFragment failed: " + t);
+        }
+        return null;
     }
 
     /** Currently playing song, or null. Reflection-only, never throws. */
