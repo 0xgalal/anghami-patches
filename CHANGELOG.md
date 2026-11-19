@@ -1,3 +1,13 @@
+## [1.11.0](https://github.com/0xgalal/anghami-patches/compare/v1.10.7...v1.11.0) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* add mavenCentral for plugin dependency resolution ([80d5a7b](https://github.com/0xgalal/anghami-patches/commit/80d5a7b10a06e9c8f0cee2760c471883a90d8286))
+
+### ✨ New Features
+
+* add KuGou, LyricsPlus, Better Lyrics and Paxsenix fallbacks ([ef47aae](https://github.com/0xgalal/anghami-patches/commit/ef47aae582eb6855c374cd234d2db3a0c8d69f7a))
+
 ## [1.10.7](https://github.com/0xgalal/anghami-patches/compare/v1.10.6...v1.10.7) (2026-11-19)
 
 ### 🐛 Bug Fixes
