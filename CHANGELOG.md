@@ -1,3 +1,9 @@
+## [1.3.4](https://github.com/0xgalal/anghami-patches/compare/v1.3.3...v1.3.4) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* capture lyrics callback for long-press options ([9fa0d72](https://github.com/0xgalal/anghami-patches/commit/9fa0d72b0783e8c71594e5cf40542d70c8be1648))
+
 ## [1.3.3](https://github.com/0xgalal/anghami-patches/compare/v1.3.2...v1.3.3) (2026-11-19)
 
 ### 🐛 Bug Fixes
