@@ -96,6 +96,26 @@ public final class LrclibFallback {
     // lyrics. Keep each attempt short so a slow/unreachable endpoint fails
     // fast instead of stalling the whole waterfall for 12s per request.
     private static final int LRCLIB_TIMEOUT_MS = 6000;
+    // Aggregator/Apple/KuGou endpoints can be slower than LRCLIB. Give them
+    // a little more room, but keep it bounded so a total miss still ends.
+    private static final int EXTENDED_TIMEOUT_MS = 9000;
+    private static final String KUGOU_SEARCH_URL = "https://lyrics.kugou.com/search";
+    private static final String KUGOU_DOWNLOAD_URL = "https://lyrics.kugou.com/download";
+    private static final String[] LYRICSPLUS_BASES = {
+            "https://lyricsplus.binimum.org",
+            "https://lyricsplus.prjktla.my.id",
+            "https://lyricsplus.binimum.org/"
+    };
+    private static final String BETTERLYRICS_URL = "https://lyrics-api.boidu.dev/getLyrics";
+    private static final String PAXSENIX_SEARCH_URL =
+            "https://lyrics.paxsenix.org/apple-music/search";
+    private static final String PAXSENIX_LYRICS_URL =
+            "https://lyrics.paxsenix.org/apple-music/lyrics";
+    private static final String BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    private static final int MAX_EXTENDED_CANDIDATES = 3;
+    private static final int DURATION_TOLERANCE_MS = 8000;
+    private static final int CANDIDATE_DURATION_TOLERANCE_MS = 10000;
     private static final int TRANSLATION_TIMEOUT_MS = 90000;
     private static final int MAX_TRANSLATION_LINES = 800;
     private static final int MAX_TRANSLATION_CHARS = 40000;
@@ -1547,7 +1567,20 @@ public final class LrclibFallback {
         float duration = song.hasDuration ? song.duration : -1;
         Result r = apiSearchFielded(title, artist, duration);
         if (r != null) return r;
-        return apiSearchQ(title, artist, duration);
+        r = apiSearchQ(title, artist, duration);
+        if (r != null) return r;
+
+        // LRCLIB came back empty. Walk the extra sources in priority order;
+        // the first one with usable synced lyrics wins. Each source is
+        // self-contained and swallows its own failures so one dead endpoint
+        // cannot stop the rest of the chain.
+        r = fromKugou(song);
+        if (r != null) return r;
+        r = fromLyricsPlus(song);
+        if (r != null) return r;
+        r = fromBetterLyrics(song);
+        if (r != null) return r;
+        return fromPaxsenix(song);
     }
 
     /**
@@ -1579,15 +1612,19 @@ public final class LrclibFallback {
     }
 
     private static String httpGet(String url) throws Exception {
+        return httpGet(url, UA, LRCLIB_TIMEOUT_MS);
+    }
+
+    private static String httpGet(String url, String userAgent, int timeoutMs) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod("GET");
-        c.setRequestProperty("User-Agent", UA);
+        c.setRequestProperty("User-Agent", userAgent);
         c.setRequestProperty("Accept", "application/json");
-        c.setConnectTimeout(LRCLIB_TIMEOUT_MS);
-        c.setReadTimeout(LRCLIB_TIMEOUT_MS);
+        c.setConnectTimeout(timeoutMs);
+        c.setReadTimeout(timeoutMs);
         int code = c.getResponseCode();
         if (code == 404) return null; // clean miss (TrackNotFound).
-        if (code == 503) throw new RateLimited();
+        if (code == 503 && UA.equals(userAgent)) throw new RateLimited();
         if (code < 200 || code >= 300) return null;
         InputStream in = c.getInputStream();
         BufferedReader br = new BufferedReader(new InputStreamReader(in, "UTF-8"));
@@ -1688,6 +1725,316 @@ public final class LrclibFallback {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // ============ extra lyrics sources (KuGou -> LyricsPlus -> Better Lyrics -> Paxsenix) ============
+
+    private static Result lrcResult(String lrc, String queryUsed, String source) {
+        if (lrc == null) return null;
+        String clean = lrc.replace("\r\n", "\n").replace('\r', '\n').trim();
+        if (clean.isEmpty() || clean.indexOf('[') < 0) return null;
+        if (parseLrc(clean).isEmpty()) return null;
+        Result r = new Result();
+        r.synced = clean;
+        r.plain = null;
+        r.queryUsed = queryUsed;
+        r.source = source;
+        return r;
+    }
+
+    private static String lrcStamp(long ms) {
+        long safe = Math.max(0, ms);
+        return String.format(Locale.ROOT, "[%02d:%02d.%02d]",
+                safe / 60000, (safe / 1000) % 60, (safe % 1000) / 10);
+    }
+
+    private static long longValue(Object value) {
+        try {
+            if (value instanceof Number) return ((Number) value).longValue();
+            if (value != null) return Long.parseLong(String.valueOf(value).trim());
+        } catch (Exception ignored) {
+        }
+        return 0;
+    }
+
+    /** KuGou: search candidates, then download a base64-encoded .lrc file. */
+    private static Result fromKugou(SongInfo song) {
+        try {
+            String keyword = (normalize(song.title, true) + " - "
+                    + normalize(song.artist, true)).trim();
+            if ("-".equals(keyword) || keyword.trim().isEmpty()) return null;
+            StringBuilder u = new StringBuilder(KUGOU_SEARCH_URL)
+                    .append("?ver=1&man=yes&client=pc&keyword=").append(enc(keyword));
+            if (song.hasDuration && song.duration > 0) {
+                u.append("&duration=")
+                        .append(enc(String.valueOf(Math.round(song.duration * 1000f))));
+            }
+            String body = httpGet(u.toString(), BROWSER_UA, EXTENDED_TIMEOUT_MS);
+            if (body == null) return null;
+            JSONArray candidates = new JSONObject(body).optJSONArray("candidates");
+            if (candidates == null) return null;
+            int limit = Math.min(candidates.length(), MAX_EXTENDED_CANDIDATES);
+            for (int i = 0; i < limit; i++) {
+                JSONObject cand = candidates.optJSONObject(i);
+                if (cand == null) continue;
+                long candMs = longValue(cand.opt("duration"));
+                if (song.hasDuration && candMs > 0
+                        && Math.abs(candMs - song.duration * 1000f) > DURATION_TOLERANCE_MS) {
+                    continue;
+                }
+                String id = cand.optString("id", "");
+                String accessKey = cand.optString("accesskey", "");
+                if (id.isEmpty() || accessKey.isEmpty()) continue;
+                String download = httpGet(KUGOU_DOWNLOAD_URL
+                        + "?fmt=lrc&charset=utf8&client=pc&ver=1&id=" + enc(id)
+                        + "&accesskey=" + enc(accessKey), BROWSER_UA, EXTENDED_TIMEOUT_MS);
+                if (download == null) continue;
+                String content = new JSONObject(download).optString("content", "");
+                if (content.isEmpty()) continue;
+                byte[] decoded = android.util.Base64.decode(
+                        content.getBytes("UTF-8"), android.util.Base64.DEFAULT);
+                String lrc = new String(decoded, "UTF-8");
+                Result r = lrcResult(lrc, "kugou " + keyword, "kugou");
+                if (r != null) return r;
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "KuGou lookup failed: " + t);
+        }
+        return null;
+    }
+
+    /** LyricsPlus: several deployments of an Apple/Musixmatch/Spotify aggregator. */
+    private static Result fromLyricsPlus(SongInfo song) {
+        if (song.title.isEmpty() || song.artist.isEmpty()) return null;
+        for (String base : LYRICSPLUS_BASES) {
+            try {
+                String root = base.endsWith("/") ? base : base + "/";
+                StringBuilder u = new StringBuilder(root).append("v2/lyrics/get?title=")
+                        .append(enc(song.title)).append("&artist=").append(enc(song.artist));
+                if (song.hasDuration && song.duration > 0) {
+                    u.append("&duration=")
+                            .append(enc(String.valueOf(Math.round(song.duration))));
+                }
+                String body = httpGet(u.toString(), UA, EXTENDED_TIMEOUT_MS);
+                if (body == null) continue;
+                JSONArray rows = new JSONObject(body).optJSONArray("lyrics");
+                if (rows == null || rows.length() == 0) continue;
+                StringBuilder lrc = new StringBuilder();
+                for (int i = 0; i < rows.length(); i++) {
+                    JSONObject row = rows.optJSONObject(i);
+                    if (row == null) continue;
+                    String text = row.optString("text", "").trim();
+                    if (text.isEmpty()) continue;
+                    lrc.append(lrcStamp(longValue(row.opt("time")))).append(text).append('\n');
+                }
+                Result r = lrcResult(lrc.toString(),
+                        "lyricsplus " + song.title + " - " + song.artist, "lyricsplus");
+                if (r != null) return r;
+            } catch (Throwable t) {
+                Log.d(TAG, "LyricsPlus lookup failed for " + base + ": " + t);
+            }
+        }
+        return null;
+    }
+
+    /** Better Lyrics: Apple TTML with tight line timings. */
+    private static Result fromBetterLyrics(SongInfo song) {
+        try {
+            if (song.title.isEmpty() || song.artist.isEmpty()) return null;
+            StringBuilder u = new StringBuilder(BETTERLYRICS_URL)
+                    .append("?s=").append(enc(song.title))
+                    .append("&a=").append(enc(song.artist));
+            if (song.hasDuration && song.duration > 0) {
+                u.append("&d=").append(enc(String.valueOf(Math.round(song.duration))));
+            }
+            String body = httpGet(u.toString(), UA, EXTENDED_TIMEOUT_MS);
+            if (body == null) return null;
+            String ttml = new JSONObject(body).optString("ttml", "");
+            Result r = lrcResult(ttmlToLrc(ttml),
+                    "betterlyrics " + song.title + " - " + song.artist, "betterlyrics");
+            return r;
+        } catch (Throwable t) {
+            Log.d(TAG, "Better Lyrics lookup failed: " + t);
+            return null;
+        }
+    }
+
+    /** Paxsenix: search the Apple Music catalogue, then fetch the best match. */
+    private static Result fromPaxsenix(SongInfo song) {
+        try {
+            String q = (normalize(song.title, true) + " "
+                    + normalize(song.artist, true)).trim();
+            if (q.isEmpty()) return null;
+            String body = httpGet(PAXSENIX_SEARCH_URL + "?q=" + enc(q),
+                    BROWSER_UA, EXTENDED_TIMEOUT_MS);
+            if (body == null) return null;
+            JSONArray hits = new JSONArray(body);
+            List<String[]> scored = new ArrayList<String[]>();
+            for (int i = 0; i < Math.min(hits.length(), 20); i++) {
+                JSONObject hit = hits.optJSONObject(i);
+                if (hit == null) continue;
+                String track = hit.optString("trackName", hit.optString("songName", ""));
+                String artist = hit.optString("artistName", "");
+                long durationMs = longValue(hit.opt("duration"));
+                int durationSec = durationMs > 0 ? (int) (durationMs / 1000) : -1;
+                int score = candidateScore(song.title, song.artist,
+                        song.hasDuration ? (int) song.duration : -1,
+                        track, artist, durationSec);
+                String id = hit.optString("id", "");
+                if (score > 0 && !id.isEmpty()) {
+                    scored.add(new String[]{String.valueOf(score), id, artist, track});
+                }
+            }
+            Collections.sort(scored, new Comparator<String[]>() {
+                @Override
+                public int compare(String[] a, String[] b) {
+                    return Integer.compare(Integer.parseInt(b[0]), Integer.parseInt(a[0]));
+                }
+            });
+            for (int i = 0; i < Math.min(scored.size(), MAX_EXTENDED_CANDIDATES); i++) {
+                String[] pick = scored.get(i);
+                String lyricsBody = httpGet(PAXSENIX_LYRICS_URL + "?id=" + enc(pick[1]),
+                        BROWSER_UA, EXTENDED_TIMEOUT_MS);
+                if (lyricsBody == null) continue;
+                JSONObject data = new JSONObject(lyricsBody);
+                String lrc = ttmlToLrc(data.optString("ttmlContent", ""));
+                if (lrc.isEmpty()) {
+                    lrc = stripWordTags(data.optString("elrcMultiPerson",
+                            data.optString("elrc", "")));
+                }
+                if (lrc.isEmpty()) lrc = data.optString("plain", "");
+                Result r = lrcResult(lrc,
+                        "paxsenix " + pick[3] + " - " + pick[2], "paxsenix");
+                if (r != null) return r;
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "Paxsenix lookup failed: " + t);
+        }
+        return null;
+    }
+
+    static int candidateScore(String title, String artist, int durationSec,
+                                      String candidateTitle, String candidateArtist,
+                                      int candidateDurationSec) {
+        String wantedTitle = normalize(title, true);
+        String wantedArtist = normalize(artist, true);
+        String gotTitle = normalize(candidateTitle, true);
+        String gotArtist = normalize(candidateArtist, true);
+        if (wantedTitle.isEmpty() || gotTitle.isEmpty()) return 0;
+        int score = 0;
+        if (wantedTitle.equals(gotTitle)) score += 80;
+        else if (wantedTitle.contains(gotTitle) || gotTitle.contains(wantedTitle)) score += 40;
+        else return 0;
+        if (!wantedArtist.isEmpty() && (gotArtist.contains(wantedArtist)
+                || wantedArtist.contains(gotArtist))) {
+            score += 50;
+        }
+        if (durationSec > 0 && candidateDurationSec > 0) {
+            long diff = Math.abs(candidateDurationSec - durationSec);
+            if (diff <= 2) score += 100;
+            else if (diff <= 5) score += 50;
+            else if (diff <= CANDIDATE_DURATION_TOLERANCE_MS / 1000) score += 10;
+            else score -= 50;
+        }
+        return score;
+    }
+
+    private static String stripWordTags(String raw) {
+        if (raw == null) return "";
+        return raw.replaceAll("<[^>]*>", "").replace("\r", "").trim();
+    }
+
+    /** Convert Apple-style TTML to .lrc using line-level begin timings. */
+    static String ttmlToLrc(String ttml) {
+        if (ttml == null || ttml.trim().isEmpty()) return "";
+        List<long[]> times = new ArrayList<long[]>();
+        List<String> texts = new ArrayList<String>();
+        try {
+            Pattern p = Pattern.compile("<p\\b([^>]*)>(.*?)</p>",
+                    Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+            Matcher m = p.matcher(ttml);
+            while (m.find()) {
+                Long ms = parseTtmlTime(xmlAttr(m.group(1), "begin"));
+                if (ms == null) continue;
+                String text = decodeEntities(stripTags(m.group(2))).trim();
+                if (text.isEmpty()) continue;
+                times.add(new long[]{ms});
+                texts.add(text);
+            }
+        } catch (Throwable t) {
+            return "";
+        }
+        if (times.isEmpty()) return "";
+        List<Integer> order = new ArrayList<Integer>();
+        for (int i = 0; i < times.size(); i++) order.add(i);
+        Collections.sort(order, new Comparator<Integer>() {
+            @Override
+            public int compare(Integer a, Integer b) {
+                return Long.compare(times.get(a)[0], times.get(b)[0]);
+            }
+        });
+        StringBuilder lrc = new StringBuilder();
+        for (Integer index : order) {
+            lrc.append(lrcStamp(times.get(index)[0])).append(texts.get(index)).append('\n');
+        }
+        return lrc.toString();
+    }
+
+    private static String xmlAttr(String attrs, String name) {
+        if (attrs == null) return null;
+        Pattern single = Pattern.compile("\\b" + name + "\\s*=\\s*['\"]([^'\"]+)['\"]",
+                Pattern.CASE_INSENSITIVE);
+        Matcher m = single.matcher(attrs);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static String stripTags(String html) {
+        return html == null ? "" : html.replaceAll("<[^>]*>", "");
+    }
+
+    private static String decodeEntities(String text) {
+        if (text == null) return "";
+        String out = text.replace("&amp;", "&").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&quot;", "\"")
+                .replace("&apos;", "'").replace("&#39;", "'")
+                .replace("&nbsp;", " ");
+        try {
+            Matcher m = Pattern.compile("&#(\\d+);").matcher(out);
+            StringBuffer sb = new StringBuffer();
+            while (m.find()) {
+                m.appendReplacement(sb, String.valueOf((char) Integer.parseInt(m.group(1))));
+            }
+            m.appendTail(sb);
+            return sb.toString();
+        } catch (Throwable t) {
+            return out;
+        }
+    }
+
+    private static Long parseTtmlTime(String value) {
+        if (value == null) return null;
+        String text = value.trim().replace(",", ".");
+        if (text.isEmpty()) return null;
+        try {
+            Matcher clock = Pattern.compile("^(?:(\\d+):)?(\\d+):(\\d+(?:\\.\\d+)?)$")
+                    .matcher(text);
+            if (clock.matches()) {
+                long hours = longValue(clock.group(1));
+                return (long) ((hours * 3600 + Long.parseLong(clock.group(2)) * 60
+                        + Double.parseDouble(clock.group(3))) * 1000);
+            }
+            Matcher offset = Pattern.compile("^(\\d+(?:\\.\\d+)?)(ms|s|m|h)$")
+                    .matcher(text);
+            if (offset.matches()) {
+                double amount = Double.parseDouble(offset.group(1));
+                String unit = offset.group(2);
+                long scale = "ms".equals(unit) ? 1L : "s".equals(unit) ? 1000L
+                        : "m".equals(unit) ? 60000L : 3600000L;
+                return (long) (amount * scale);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private static Result apiGetById(long id) {
