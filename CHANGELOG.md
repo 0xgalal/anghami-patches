@@ -1,3 +1,9 @@
+## [1.6.2](https://github.com/0xgalal/anghami-patches/compare/v1.6.1...v1.6.2) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* stop skip-limit similar-song fallback ([#8](https://github.com/0xgalal/anghami-patches/issues/8)) ([064d5f1](https://github.com/0xgalal/anghami-patches/commit/064d5f1ac5eea258cd8be04eabe4f6b2e8fe6e20))
+
 ## [1.6.1](https://github.com/0xgalal/anghami-patches/compare/v1.6.0...v1.6.1) (2026-11-19)
 
 ### 🐛 Bug Fixes
