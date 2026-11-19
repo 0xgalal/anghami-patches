@@ -58,8 +58,7 @@
           "gradle.properties",
           "patches-bundle.json",
           "patches-list.json",
-          "README.md",
-          "gradlew.bat"
+          "README.md"
         ],
         "message": "chore: Release v${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
