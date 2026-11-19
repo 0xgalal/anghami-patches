@@ -1,3 +1,9 @@
+## [1.10.2](https://github.com/0xgalal/anghami-patches/compare/v1.10.1...v1.10.2) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* keep native lyrics render and label the AI lyrics button ([669a164](https://github.com/0xgalal/anghami-patches/commit/669a164c6c898b48198f36cdd9a2fdec7738a1f3))
+
 ## [1.10.1](https://github.com/0xgalal/anghami-patches/compare/v1.10.0...v1.10.1) (2026-11-19)
 
 ### 🔧 Improvements
