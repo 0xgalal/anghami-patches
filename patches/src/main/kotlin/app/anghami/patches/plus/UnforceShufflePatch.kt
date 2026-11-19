@@ -101,16 +101,13 @@ val unforceShufflePatch = bytecodePatch(
             }
             method.replaceInstructions(matches[0], "const/4 $register, 0x0")
         }
-        // Local-authoritative index: nop the unconditional
-        // `iget vX, p1, ServerPlayQueue;->index` -> `iput vX, p0,
-        // PlayQueue;->index` copy in updateFromSocketPayload (same method as
-        // the socket shuffle hook above). Located by pattern: the server-
-        // side iget is the only `index` iget off ServerPlayQueue (the rest
-        // read the local field), and the very next instruction must be its
-        // iput — fail loudly otherwise. Label-safe: neither instruction
-        // carries a branch label (both sit between `if-nez :cond_3` and the
-        // bounds check). The OOB-clamp below then validates the LOCAL index
-        // (always in range — we just set it) instead of the server's.
+        // Local-authoritative index in updateFromSocketPayload: the server
+        // index is also used by the following bounds check, even if its
+        // subsequent write to PlayQueue.index is nopped. Read the live local
+        // index into that register instead, then nop the write. Otherwise an
+        // out-of-range stale server index still trips the clamp and resets
+        // the current local position to zero. Locate both instructions by
+        // their fields and fail loudly if the expected adjacent copy changes.
         run {
             val method = SocketPayloadShuffleFingerprint.method
             val insns = method.implementation!!.instructions
@@ -129,12 +126,24 @@ val unforceShufflePatch = bytecodePatch(
             check(gets.size == 1) {
                 "expected exactly 1 ServerPlayQueue.index iget, found ${gets.size}"
             }
+            val serverIndexGet = insns[gets[0]] as Instruction22c
+            check(serverIndexGet.opcode == Opcode.IGET) {
+                "expected ServerPlayQueue.index to be read with iget"
+            }
             val next = insns[gets[0] + 1]
             check(next.opcode == Opcode.IPUT && next is Instruction22c &&
-                (next.reference as? FieldReference)?.name == "index"
+                (next.reference as? FieldReference)?.name == "index" &&
+                (next.reference as? FieldReference)?.definingClass ==
+                "Lcom/anghami/odin/playqueue/PlayQueue;" &&
+                next.registerA == serverIndexGet.registerA
             ) {
                 "expected PlayQueue.index iput right after the server iget"
             }
+            method.replaceInstructions(
+                gets[0],
+                "iget v${serverIndexGet.registerA}, p0, " +
+                    "Lcom/anghami/odin/playqueue/PlayQueue;->index:I"
+            )
             method.replaceInstructions(gets[0] + 1, "nop")
         }
         // Never report shuffle (2026-10-05): nop the `if isShuffleMode():
@@ -223,7 +232,7 @@ val unforceShufflePatch = bytecodePatch(
                 move-result v1
                 if-eqz v1, :noexpand_allow
                 instance-of v0, p0, Lcom/anghami/odin/playqueue/SongPlayqueue;
-                if-nez v0, :noexpand_isradio
+                if-eqz v0, :noexpand_isradio
                 goto :noexpand_block
                 :noexpand_isradio
                 instance-of v0, p0, Lcom/anghami/odin/playqueue/RadioPlayQueue;
