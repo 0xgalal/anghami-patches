@@ -2243,6 +2243,18 @@ public final class LrclibFallback {
         editor.apply();
     }
 
+    private static String openCodeSessionId(Context ctx) {
+        synchronized (LrclibFallback.class) {
+            SharedPreferences prefs = translationPrefs(ctx);
+            String session = prefs.getString("opencode_session_id", "");
+            if (session == null || session.trim().isEmpty()) {
+                session = "ses_" + java.util.UUID.randomUUID().toString();
+                prefs.edit().putString("opencode_session_id", session).apply();
+            }
+            return session;
+        }
+    }
+
     private static void showTranslationDialog(final Context ctx, final Object song) {
         showTranslationDialog(ctx, song, null, false);
     }
@@ -2847,7 +2859,9 @@ public final class LrclibFallback {
                 String failure = null;
                 if (translated == null) {
                     try {
-                        translated = requestTranslation(provider, apiKey, model,
+                        String sessionId = provider == TranslationProvider.OPENCODE
+                                ? openCodeSessionId(ctx) : null;
+                        translated = requestTranslation(provider, apiKey, model, sessionId,
                                 language, systemPrompt, snapshot.lines);
                         writeTranslationCache(ctx, cacheKey, translated);
                     } catch (Throwable t) {
@@ -2968,7 +2982,7 @@ public final class LrclibFallback {
     }
 
     private static List<String> requestTranslation(TranslationProvider provider, String apiKey,
-                                                   String model, String language,
+                                                   String model, String sessionId, String language,
                                                    String systemPrompt, List<Line> source)
             throws Exception {
         JSONArray inputLines = new JSONArray();
@@ -3009,7 +3023,6 @@ public final class LrclibFallback {
         Exception lastError = null;
         // Prefer strict schema output, then relax to JSON mode for models or
         // provider routes that do not support structured outputs.
-        String sessionId = "ses_" + java.util.UUID.randomUUID().toString().replace("-", "");
         for (int outputMode = 2; outputMode >= 0; outputMode--) {
             HttpURLConnection connection = null;
             try {

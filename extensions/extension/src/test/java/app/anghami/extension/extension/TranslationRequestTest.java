@@ -42,7 +42,7 @@ public class TranslationRequestTest {
                 } : null);
         request = LrclibFallback.class.getDeclaredMethod("requestTranslation",
                 TranslationProvider.class, String.class, String.class, String.class,
-                String.class, List.class);
+                String.class, String.class, List.class);
         request.setAccessible(true);
         parseLyrics = LrclibFallback.class.getDeclaredMethod("parseLrc", String.class);
         parseLyrics.setAccessible(true);
@@ -148,6 +148,7 @@ public class TranslationRequestTest {
     private static List<?> translate(TranslationProvider provider, String key) throws Exception {
         try {
             return (List<?>) request.invoke(null, provider, key, provider.defaultModel,
+                    provider == TranslationProvider.OPENCODE ? "ses_test-session" : null,
                     "French", "", parseLyrics.invoke(null, "[00:01.00]Hello"));
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
