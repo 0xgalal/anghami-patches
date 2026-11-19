@@ -1,3 +1,13 @@
+## [1.8.0](https://github.com/0xgalal/anghami-patches/compare/v1.7.0...v1.8.0) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* persist OpenCode translation session ([937e961](https://github.com/0xgalal/anghami-patches/commit/937e961779d79cdddbacca7fbbf13b66ac24fc6d))
+
+### ✨ New Features
+
+* add OpenCode translation provider ([75dabc2](https://github.com/0xgalal/anghami-patches/commit/75dabc2008ef7801c4925056fad2d44be84e6f1e))
+
 ## [1.7.0](https://github.com/0xgalal/anghami-patches/compare/v1.6.2...v1.7.0) (2026-11-19)
 
 ### ✨ New Features
