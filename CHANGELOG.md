@@ -1,3 +1,9 @@
+## [1.6.1](https://github.com/0xgalal/anghami-patches/compare/v1.6.0...v1.6.1) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* prevent tracks from skipping in Unforce shuffle ([#7](https://github.com/0xgalal/anghami-patches/issues/7)) ([757baeb](https://github.com/0xgalal/anghami-patches/commit/757baeba857d60b08b1ead91fd2d5d41bdb77a38))
+
 ## [1.6.0](https://github.com/0xgalal/anghami-patches/compare/v1.5.0...v1.6.0) (2026-11-19)
 
 ### ✨ New Features
