@@ -29,6 +29,14 @@ enum TranslationProvider {
             new String[]{
                     "glm-5.3-flash", "deepseek-v4.1-flash", "qwen3.8-flash",
                     "gpt-6-luna", "claude-haiku-5-5",
+            }),
+    XKIRO("xkiro", "xKiro",
+            "https://api.xkiro.com/v1/chat/completions",
+            "https://api.xkiro.com/v1/models",
+            "mistralai/mistral-small-2603",
+            new String[]{
+                    "mistralai/mistral-small-2603", "cohere/command-a-translate",
+                    "cohere/north-small-translate", "openai/gpt-5.6-luna",
             });
 
     final String id;
@@ -74,7 +82,9 @@ enum TranslationProvider {
             if (model == null) continue;
             String id = model.optString("id", "").trim();
             if (id.isEmpty() || "null".equals(id)) continue;
-            if (!"chat".equals(model.optString("type", "chat"))
+            if (this == XKIRO) {
+                if (!"chat".equals(model.optString("modality", ""))) continue;
+            } else if (!"chat".equals(model.optString("type", "chat"))
                     || !supportsText(model)) continue;
 
             boolean free;
@@ -84,7 +94,7 @@ enum TranslationProvider {
                         && isZeroPrice(pricing.optString("prompt", ""))
                         && isZeroPrice(pricing.optString("completion", "")));
                 if (!free) continue;
-            } else {
+            } else if (this == OPENCODE) {
                 JSONObject cost = model.optJSONObject("cost");
                 JSONObject text = cost == null ? null : cost.optJSONObject("text");
                 JSONObject input = text == null ? null : text.optJSONObject("input");
@@ -95,9 +105,17 @@ enum TranslationProvider {
                         && isZeroPrice(output.optString("price", "")));
                 // Console's free chat routes return 403 outside the OpenCode app.
                 if (free) continue;
+            } else {
+                JSONObject pricing = model.optJSONObject("pricing");
+                String accessTier = model.optString("access_tier", "").trim();
+                free = !accessTier.isEmpty()
+                        ? "free".equalsIgnoreCase(accessTier)
+                        : (pricing != null
+                        && isZeroPrice(pricing.optString("input", ""))
+                        && isZeroPrice(pricing.optString("output", "")));
             }
             if (!seen.add(id)) continue;
-            String name = model.optString("name", id).trim();
+            String name = model.optString(this == XKIRO ? "display_name" : "name", id).trim();
             models.add(new Model(id, name.isEmpty() ? id : name, free));
         }
         Collections.sort(models, new Comparator<Model>() {
@@ -113,7 +131,11 @@ enum TranslationProvider {
     List<Model> fallbackModels() {
         List<Model> models = new ArrayList<Model>(fallbackModels.length);
         for (String model : fallbackModels) {
-            models.add(new Model(model, model, false));
+            boolean free = this == XKIRO
+                    && (model.equals("mistralai/mistral-small-2603")
+                    || model.equals("cohere/command-a-translate")
+                    || model.equals("cohere/north-small-translate"));
+            models.add(new Model(model, model, free));
         }
         return models;
     }

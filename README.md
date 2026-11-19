@@ -34,7 +34,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 | 💊&nbsp;Patch | 📜&nbsp;Description | ⚙️&nbsp;Options |
 |----------|----------------|-----------|
-| [AI lyrics translation · OpenRouter / OpenCode](#ai-lyrics-translation-openrouter-opencode) | Adds optional automatic lyric translation via OpenRouter or OpenCode, shown beneath each original line. Long-press the player Lyrics button to choose a provider and configure it. |  |
+| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-via-openrouter-opencode-or-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro, shown beneath each original line. Long-press the player Lyrics button to choose a provider and configure it. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
@@ -67,22 +67,27 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 Fingerprints pin 8.0.28 method shapes — re-verify them against a fresh decode
 before using these patches on any other app version.
 
-### AI lyrics translation via OpenRouter or OpenCode
+### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 
-Enable **AI lyrics translation · OpenRouter / OpenCode** in Morphe. It includes
+Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It includes
 **Lyrics options in Settings** and the LRCLIB fallback patch it depends on.
 In the player, long-press the **Lyrics** button and enable automatic
-translation. Tap **Provider** to select **OpenRouter** or **OpenCode**, then enter
+translation. Tap **Provider** to select **OpenRouter**, **OpenCode**, or **xKiro**, then enter
 that provider's API key, model ID, and target language. Keys and selected models
 are saved separately for each provider.
 
-The model picker fetches OpenRouter's current free models or OpenCode's
-externally usable chat models. If the catalog cannot be reached, it uses that
-provider's built-in list. Custom model IDs are also supported. Defaults are
-`inception/mercury-2.5-preview` for OpenRouter and `glm-5.3-flash` for OpenCode.
+The model picker fetches OpenRouter's current free models, OpenCode's
+externally usable chat models, or xKiro's public chat catalog. If a catalog
+cannot be reached, it uses that provider's built-in list. Custom model IDs are
+also supported. Defaults are `inception/mercury-2.5-preview` for OpenRouter,
+`glm-5.3-flash` for OpenCode, and `mistralai/mistral-small-2603` for xKiro.
 OpenCode uses a [Console API key](https://opencode.ai/docs/console/harnesses)
 with pay-as-you-go credits. Its free-tier chat models are restricted to the
 OpenCode app and cannot be used from Anghami.
+xKiro uses an [API key](https://docs.xkiro.com/guides/authentication/) and
+supports OpenAI-compatible chat completions. Free models have a daily token
+allowance; paid models need an eligible plan or balance, and premium models
+need an eligible plan or a real deposit.
 
 The default target language is Arabic on Arabic-locale devices or English
 otherwise. Enabling auto-translate

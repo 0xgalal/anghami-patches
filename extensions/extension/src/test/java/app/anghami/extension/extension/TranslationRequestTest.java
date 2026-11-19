@@ -60,15 +60,24 @@ public class TranslationRequestTest {
                 "fetchTranslationModels", TranslationProvider.class);
         fetch.setAccessible(true);
         for (TranslationProvider provider : TranslationProvider.values()) {
-            responses.add(new Response(200, "{\"data\":["
-                    + "{\"id\":\"provider/model:free\",\"name\":\"Free\"},"
-                    + "{\"id\":\"glm-5.3-flash\",\"name\":\"GLM\",\"type\":\"chat\"}]}"));
+            String catalog = provider == TranslationProvider.XKIRO
+                    ? "{\"object\":\"list\",\"data\":[{\"id\":\"mistralai/mistral-small-2603\","
+                    + "\"display_name\":\"Mistral Small 4\",\"modality\":\"chat\","
+                    + "\"access_tier\":\"free\"}]}"
+                    : "{\"data\":[{\"id\":\"provider/model:free\",\"name\":\"Free\"},"
+                    + "{\"id\":\"glm-5.3-flash\",\"name\":\"GLM\",\"type\":\"chat\"}]}";
+            responses.add(new Response(200, catalog));
             List<?> models = (List<?>) fetch.invoke(null, provider);
             assertFalse(models.isEmpty());
             Connection connection = connections.get(connections.size() - 1);
-            String expectedUrl = provider == TranslationProvider.OPENROUTER
-                    ? "https://openrouter.ai/api/v1/models"
-                    : "https://opencode.ai/inference/v1/models";
+            String expectedUrl;
+            if (provider == TranslationProvider.OPENROUTER) {
+                expectedUrl = "https://openrouter.ai/api/v1/models";
+            } else if (provider == TranslationProvider.OPENCODE) {
+                expectedUrl = "https://opencode.ai/inference/v1/models";
+            } else {
+                expectedUrl = "https://api.xkiro.com/v1/models";
+            }
             assertEquals(expectedUrl, connection.getURL().toString());
             assertEquals("GET", connection.getRequestMethod());
             assertNull(connection.getRequestProperty("Authorization"));
@@ -82,9 +91,14 @@ public class TranslationRequestTest {
             responses.add(new Response(200, success("Bonjour")));
             assertEquals(Arrays.asList("Bonjour"), translate(provider, provider.id + "-test-key"));
             Connection connection = connections.get(connections.size() - 1);
-            String expectedUrl = provider == TranslationProvider.OPENROUTER
-                    ? "https://openrouter.ai/api/v1/chat/completions"
-                    : "https://opencode.ai/inference/openai/v1/chat/completions";
+            String expectedUrl;
+            if (provider == TranslationProvider.OPENROUTER) {
+                expectedUrl = "https://openrouter.ai/api/v1/chat/completions";
+            } else if (provider == TranslationProvider.OPENCODE) {
+                expectedUrl = "https://opencode.ai/inference/openai/v1/chat/completions";
+            } else {
+                expectedUrl = "https://api.xkiro.com/v1/chat/completions";
+            }
             assertEquals(expectedUrl, connection.getURL().toString());
             assertEquals("POST", connection.getRequestMethod());
             assertEquals("Bearer " + provider.id + "-test-key",
@@ -96,6 +110,10 @@ public class TranslationRequestTest {
                     .getString("content").contains("Hello"));
             if (provider == TranslationProvider.OPENCODE) {
                 assertNotNull(connection.getRequestProperty("x-opencode-session"));
+                assertNull(connection.getRequestProperty("HTTP-Referer"));
+                assertFalse(body.has("temperature"));
+            } else if (provider == TranslationProvider.XKIRO) {
+                assertNull(connection.getRequestProperty("x-opencode-session"));
                 assertNull(connection.getRequestProperty("HTTP-Referer"));
                 assertFalse(body.has("temperature"));
             } else {
@@ -134,6 +152,29 @@ public class TranslationRequestTest {
         assertTrue(error.getMessage().contains("OpenCode HTTP 403"));
         assertEquals(1, connections.size());
         assertTrue(connections.get(0).disconnected);
+    }
+
+    @Test
+    public void xKiroUsesDocumentedJsonObjectAndDoesNotSendOpenCodeSessionHeader() throws Exception {
+        responses.add(new Response(200, success("Bonjour")));
+        assertEquals(Arrays.asList("Bonjour"), translate(TranslationProvider.XKIRO, "test-key"));
+        assertEquals(1, connections.size());
+        Connection connection = connections.get(0);
+        assertEquals("Bearer test-key", connection.getRequestProperty("Authorization"));
+        assertNull(connection.getRequestProperty("x-opencode-session"));
+        assertEquals("json_object", connection.requestBody()
+                .getJSONObject("response_format").getString("type"));
+    }
+
+    @Test
+    public void xKiroFallsBackToPlainCompletionIfJsonModeIsRejected() throws Exception {
+        responses.add(new Response(400, "{\"error\":{\"message\":\"response_format unsupported\"}}"));
+        responses.add(new Response(200, success("Bonjour")));
+        assertEquals(Arrays.asList("Bonjour"), translate(TranslationProvider.XKIRO, "test-key"));
+        assertEquals(2, connections.size());
+        assertEquals("json_object", connections.get(0).requestBody()
+                .getJSONObject("response_format").getString("type"));
+        assertFalse(connections.get(1).requestBody().has("response_format"));
     }
 
     @Test

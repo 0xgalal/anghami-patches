@@ -21,9 +21,13 @@ public class TranslationProviderTest {
         assertEquals("opencode_api_key",
                 TranslationProvider.fromId("opencode").preferenceKey("api_key"));
         assertEquals("opencode_model", TranslationProvider.OPENCODE.preferenceKey("model"));
+        assertEquals("xkiro_api_key", TranslationProvider.XKIRO.preferenceKey("api_key"));
+        assertEquals("xkiro_model", TranslationProvider.XKIRO.preferenceKey("model"));
         assertEquals("shared-model", legacy.cacheModelKey("shared-model"));
         assertNotEquals(legacy.cacheModelKey("shared-model"),
                 TranslationProvider.OPENCODE.cacheModelKey("shared-model"));
+        assertNotEquals(legacy.cacheModelKey("shared-model"),
+                TranslationProvider.XKIRO.cacheModelKey("shared-model"));
     }
 
     @Test
@@ -72,6 +76,36 @@ public class TranslationProviderTest {
     }
 
     @Test
+    public void xKiroCatalogUsesDisplayNamesAccessTiersAndChatModality() throws Exception {
+        JSONArray data = new JSONArray()
+                .put(xKiroModel("mistralai/mistral-small-2603", "Mistral Small 4",
+                        "free", 0, 0))
+                .put(xKiroModel("cohere/command-a-translate", "Command A Translate",
+                        "free", 0, 0))
+                .put(xKiroModel("openai/gpt-5.6-luna", "GPT-5.6 Luna",
+                        "paid", 0.1, 0.6))
+                .put(xKiroModel("google/gemini-3.6-flash", "Gemini 3.6 Flash",
+                        "premium", 0.4875, 2.4375))
+                .put(xKiroModel("vendor/comped-paid-tier", "Comped Paid Tier",
+                        "paid", 0, 0))
+                .put(xKiroModel("openai/voice", "Voice", "free", 0, 0)
+                        .put("modality", "tts"))
+                .put(xKiroModel("openai/gpt-5.6-luna", "Duplicate", "paid", 0.1, 0.6));
+        List<TranslationProvider.Model> models = TranslationProvider.XKIRO.parseModels(
+                new JSONObject().put("object", "list").put("data", data).toString());
+        assertEquals(Arrays.asList(
+                "cohere/command-a-translate", "google/gemini-3.6-flash",
+                "openai/gpt-5.6-luna", "vendor/comped-paid-tier",
+                "mistralai/mistral-small-2603"), ids(models));
+        assertTrue(models.get(0).displayName().contains("Command A Translate"));
+        assertTrue(models.get(0).displayName().endsWith("FREE"));
+        assertFalse(models.get(1).free);
+        assertFalse(models.get(2).free);
+        assertFalse(models.get(3).free);
+        assertTrue(models.get(4).free);
+    }
+
+    @Test
     public void invalidCatalogIsAnErrorInsteadOfAUsableEmptyList() {
         assertThrows(Exception.class, () ->
                 TranslationProvider.OPENCODE.parseModels("{\"error\":{\"message\":\"denied\"}}"));
@@ -89,6 +123,13 @@ public class TranslationProviderTest {
             throws Exception {
         return new JSONObject().put("id", id).put("name", name)
                 .put("pricing", new JSONObject().put("prompt", input).put("completion", output));
+    }
+
+    private static JSONObject xKiroModel(String id, String displayName, String tier,
+                                         double input, double output) throws Exception {
+        return new JSONObject().put("id", id).put("type", "model").put("modality", "chat")
+                .put("display_name", displayName).put("access_tier", tier)
+                .put("pricing", new JSONObject().put("input", input).put("output", output));
     }
 
     private static List<String> ids(List<TranslationProvider.Model> models) {
