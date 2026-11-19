@@ -252,28 +252,47 @@ val lyricsSettingsPatch = bytecodePatch(
 
 /**
  * Adds native-lyrics capture and automatic translation for OpenRouter, OpenCode, and xKiro.
- * Capture at the renderer covers API and StoredLyrics/cache responses;
- * truncated/empty responses are ignored so teasers are never translated.
+ * Capture at the renderer covers API and StoredLyrics/cache responses.
+ * With automatic translation enabled, source lyrics stay hidden until the
+ * original and translation can be rendered together.
  * Long-pressing the player's Lyrics toggle opens the auto-translation dialog.
  */
 @Suppress("unused")
 val lyricsOpenRouterTranslationPatch = bytecodePatch(
     name = "AI lyrics translation · OpenRouter / OpenCode / xKiro",
-    description = "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro, shown beneath each original line. Long-press the player Lyrics button to choose a provider and configure it.",
+    description = "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press the player Lyrics button to configure it.",
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     dependsOn(lyricsSettingsPatch)
 
     execute {
-        // Capture at the render choke point so lyrics loaded from Anghami's
-        // StoredLyrics cache also have a song-bound callback for the dialog.
-        // The helper ignores truncated/empty payloads; substituteCached
-        // captures its own replacement after rewriting a cached fallback.
-        LyricsSuccessFingerprint.method.addInstructions(
-            0,
+        // Run after substituteCached so the helper sees the actual full lyrics
+        // (native or cached LRCLIB), then stop this render while auto
+        // translation is pending. It paints a small pending state instead.
+        val success = LyricsSuccessFingerprint.method
+        val substituteCalls = success.implementation!!.instructions.mapIndexedNotNull { index, ins ->
+            if (ins.opcode == Opcode.INVOKE_STATIC && ins is Instruction35c &&
+                (ins.reference as? MethodReference)?.let {
+                    it.definingClass == FALLBACK_HELPER && it.name == "substituteCached"
+                } == true
+            ) {
+                index
+            } else {
+                null
+            }
+        }
+        check(substituteCalls.size == 1) {
+            "expected exactly 1 substituteCached call in lyrics render, found ${substituteCalls.size}"
+        }
+        success.addInstructions(
+            substituteCalls[0] + 1,
             """
-                invoke-static {p0, p1, p3}, $FALLBACK_HELPER->rememberNativeLyrics(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+                invoke-static {p0, p1, p3}, $FALLBACK_HELPER->deferLyricsForTranslation(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z
+                move-result v0
+                if-eqz v0, :ai_translation_render_continue
+                return-void
+                :ai_translation_render_continue
             """
         )
 

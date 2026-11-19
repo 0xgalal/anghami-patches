@@ -93,6 +93,19 @@ public final class LrclibFallback {
     private static final int TRANSLATION_TIMEOUT_MS = 90000;
     private static final int MAX_TRANSLATION_LINES = 800;
     private static final int MAX_TRANSLATION_CHARS = 40000;
+    private static final String DEFAULT_TRANSLATION_SYSTEM_PROMPT =
+            "You are a precise lyrics translation assistant. Your output must ALWAYS be a valid "
+                    + "JSON object of the form {\"lines\": [\"line1\", \"line2\", \"line3\"]}.\n\n"
+                    + "CRITICAL RULES:\n"
+                    + "1. Output ONLY the JSON object: "
+                    + "{\"lines\": [\"line1\", \"line2\", \"line3\"]}\n"
+                    + "2. NO explanations, NO questions, NO additional text\n"
+                    + "3. Each input line maps to exactly one entry in the \"lines\" array\n"
+                    + "4. Preserve empty lines as empty strings \"\"\n"
+                    + "5. The \"lines\" array must contain EXACTLY {lineCount} items\n"
+                    + "6. If uncertain, provide your best possible translation.";
+    private static final String ADDITIONAL_PROMPT_MARKER =
+            "\n\nAdditional user instructions:\n";
 
     private LrclibFallback() {
     }
@@ -143,13 +156,46 @@ public final class LrclibFallback {
      */
     public static void rememberNativeLyrics(Object songObj, Object responseObj,
                                             Object callbackObj) {
+        captureNativeLyrics(songObj, responseObj, callbackObj);
+    }
+
+    /**
+     * Captures lyrics at the render choke point and holds the original render
+     * while a valid automatic translation is being prepared.
+     */
+    public static boolean deferLyricsForTranslation(Object songObj, Object responseObj,
+                                                    Object callbackObj) {
         try {
-            if (callbackObj == null) return;
+            if (songObj == null || callbackObj == null) return false;
+            Context ctx = appContextOf(callbackObj);
+            if (!hasConfiguredAutomaticTranslation(ctx)) return false;
+
+            if (responseObj != null && isFullNativeResponse(responseObj)) {
+                boolean defer = captureNativeLyrics(songObj, responseObj, callbackObj);
+                if (defer) renderTranslationPending(songObj, callbackObj);
+                return defer;
+            }
+            if (responseObj == null || getBoolean(responseObj, "truncated")
+                    || isEmptyResponse(responseObj)) {
+                hideUnlockLyricsButton(callbackObj);
+                renderTranslationPending(songObj, callbackObj);
+                return true;
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "deferLyricsForTranslation failed: " + t);
+        }
+        return false;
+    }
+
+    private static boolean captureNativeLyrics(Object songObj, Object responseObj,
+                                               Object callbackObj) {
+        try {
+            if (callbackObj == null) return false;
             hideUnlockLyricsButton(callbackObj);
-            if (songObj == null || responseObj == null) return;
-            if (!isFullNativeResponse(responseObj)) return;
+            if (songObj == null || responseObj == null) return false;
+            if (!isFullNativeResponse(responseObj)) return false;
             SongInfo song = readSong(songObj);
-            if (song == null) return;
+            if (song == null) return false;
 
             String plain = getString(responseObj, "lyricsUnsynced");
             List<?> nativeLines = getList(responseObj, "lyricsSynced");
@@ -169,10 +215,11 @@ public final class LrclibFallback {
             boolean useSynced = !timed.isEmpty()
                     && (getBoolean(responseObj, "isSynced")
                     || plain == null || plain.trim().isEmpty());
-            setTranslationSource(song, songObj, callbackObj,
+            return setTranslationSource(song, songObj, callbackObj,
                     useSynced ? timed : plainLines(plain), useSynced);
         } catch (Throwable t) {
             Log.d(TAG, "rememberNativeLyrics failed: " + t);
+            return false;
         }
     }
 
@@ -852,10 +899,10 @@ public final class LrclibFallback {
         return out;
     }
 
-    private static void setTranslationSource(SongInfo song, Object songObj,
-                                             Object callbackObj, List<Line> lines,
-                                             boolean synced) {
-        if (song == null || songObj == null || callbackObj == null) return;
+    private static boolean setTranslationSource(SongInfo song, Object songObj,
+                                                Object callbackObj, List<Line> lines,
+                                                boolean synced) {
+        if (song == null || songObj == null || callbackObj == null) return false;
         synchronized (LrclibFallback.class) {
             translationSongId = songKey(song);
             translationSong = songObj;
@@ -874,8 +921,9 @@ public final class LrclibFallback {
         }
         if (lines != null && !lines.isEmpty()) {
             Context ctx = appContextOf(callbackObj);
-            if (ctx != null) autoTranslateIfEnabled(ctx, songObj);
+            if (ctx != null) return autoTranslateIfEnabled(ctx, songObj);
         }
+        return false;
     }
 
     private static final class SourceSnapshot {
@@ -1150,9 +1198,9 @@ public final class LrclibFallback {
             return "Automatic lyrics translation";
         }
         if ("auto_translate_note".equals(key)) {
-            if (ar) return "عند التفعيل، ستُترجم الكلمات تلقائياً عند تحميلها. تظهر الترجمة أسفل كل سطر أصلي.";
-            if (fr) return "Une fois activée, la traduction se lance au chargement des paroles et apparaît sous chaque ligne originale.";
-            return "When enabled, lyrics are translated as they load and appear beneath each original line.";
+            if (ar) return "عند التفعيل، ستظهر الكلمات الأصلية وترجمتها معاً بعد اكتمال الترجمة.";
+            if (fr) return "Une fois activée, les paroles originales et leur traduction s’affichent ensemble après la traduction.";
+            return "When enabled, original lyrics and their translation appear together after translation completes.";
         }
         if ("auto_translate_toggle".equals(key)) {
             if (ar) return "ترجمة الكلمات تلقائياً";
@@ -1343,6 +1391,11 @@ public final class LrclibFallback {
             if (ar) return "جارٍ ترجمة الكلمات عبر %s…";
             if (fr) return "Traduction des paroles via %s…";
             return "Translating lyrics with %s…";
+        }
+        if ("translation_pending".equals(key)) {
+            if (ar) return "جارٍ ترجمة الكلمات…";
+            if (fr) return "Traduction des paroles…";
+            return "Translating lyrics…";
         }
         if ("translation_failed".equals(key)) {
             if (ar) return "فشلت ترجمة الكلمات";
@@ -1795,6 +1848,7 @@ public final class LrclibFallback {
                     Object response = buildResponse(songObj, plain, synced);
                     if (response == null) return;
                     List<Object> lines = buildLines(response, plain, synced);
+                    boolean deferForTranslation = false;
                     try {
                         List<Line> sourceLines = new ArrayList<Line>();
                         boolean sourceSynced = false;
@@ -1810,9 +1864,14 @@ public final class LrclibFallback {
                                 sourceSynced = !sourceLines.isEmpty();
                             }
                         }
-                        setTranslationSource(readSong(songObj), songObj, callbackObj,
+                        deferForTranslation = setTranslationSource(
+                                readSong(songObj), songObj, callbackObj,
                                 sourceLines, sourceSynced);
                     } catch (Exception ignored) {
+                    }
+                    if (deferForTranslation) {
+                        renderTranslationPending(songObj, callbackObj);
+                        return;
                     }
                     invokeRender(callbackObj, songObj, lines, response);
                     Log.d(TAG, "fallback applied (" + queryUsed + ")");
@@ -2202,6 +2261,33 @@ public final class LrclibFallback {
         }
     }
 
+    private static String systemPromptForDialog(String customPrompt) {
+        String custom = trimOrEmpty(customPrompt);
+        if (custom.isEmpty() || DEFAULT_TRANSLATION_SYSTEM_PROMPT.equals(custom)) {
+            return DEFAULT_TRANSLATION_SYSTEM_PROMPT;
+        }
+        if (custom.startsWith(DEFAULT_TRANSLATION_SYSTEM_PROMPT)) return custom;
+        return DEFAULT_TRANSLATION_SYSTEM_PROMPT + ADDITIONAL_PROMPT_MARKER + custom;
+    }
+
+    private static String customSystemPromptFromDialog(String dialogPrompt) {
+        String prompt = trimOrEmpty(dialogPrompt);
+        if (prompt.isEmpty() || DEFAULT_TRANSLATION_SYSTEM_PROMPT.equals(prompt)) return "";
+        String markedPrefix = DEFAULT_TRANSLATION_SYSTEM_PROMPT + ADDITIONAL_PROMPT_MARKER;
+        if (prompt.startsWith(markedPrefix)) {
+            return prompt.substring(markedPrefix.length()).trim();
+        }
+        if (prompt.startsWith(DEFAULT_TRANSLATION_SYSTEM_PROMPT)) {
+            return prompt.substring(DEFAULT_TRANSLATION_SYSTEM_PROMPT.length()).trim();
+        }
+        return prompt;
+    }
+
+    private static String systemPromptSummary(String customPrompt) {
+        return trimOrEmpty(customPrompt).isEmpty()
+                ? tr("system_prompt_default") : tr("system_prompt_custom");
+    }
+
     private static SharedPreferences translationPrefs(Context ctx) {
         return ctx.getSharedPreferences(TRANSLATION_PREFS, Context.MODE_PRIVATE);
     }
@@ -2294,7 +2380,7 @@ public final class LrclibFallback {
             providerNames[value.ordinal()] = value.displayName;
         }
         final String[] language = {settings.language};
-        final String[] systemPrompt = {settings.systemPrompt};
+        final String[] systemPrompt = {systemPromptForDialog(settings.systemPrompt)};
         final TextView[] credentialSummaries = new TextView[2];
         final TextView providerNote = new TextView(ctx);
         providerNote.setText(translationProviderNote(provider[0]));
@@ -2407,8 +2493,7 @@ public final class LrclibFallback {
         addSettingsRow(ctx, rows, tr("translation_mode"),
                 tr("translation_mode_translation"), null);
         addSettingsRow(ctx, rows, tr("system_prompt"),
-                systemPrompt[0].trim().isEmpty()
-                        ? tr("system_prompt_default") : tr("system_prompt_custom"),
+                systemPromptSummary(settings.systemPrompt),
                 new View.OnClickListener() {
                     @Override
                     public void onClick(final View view) {
@@ -2417,15 +2502,15 @@ public final class LrclibFallback {
                                         | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
                                         | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
                                 true, new TextSettingListener() {
-                                    @Override
-                                    public void onValueChanged(String value) {
-                                        systemPrompt[0] = value;
-                                        refreshSettingsSummary(view, tr("system_prompt"),
-                                                value.trim().isEmpty()
-                                                        ? tr("system_prompt_default")
-                                                        : tr("system_prompt_custom"));
-                                    }
-                                });
+                                     @Override
+                                     public void onValueChanged(String value) {
+                                         systemPrompt[0] = value;
+                                         String customPrompt =
+                                                 customSystemPromptFromDialog(value);
+                                         refreshSettingsSummary(view, tr("system_prompt"),
+                                                 systemPromptSummary(customPrompt));
+                                     }
+                                 });
                     }
                 });
         addSettingsRow(ctx, rows, tr("target_language"), language[0],
@@ -2460,7 +2545,8 @@ public final class LrclibFallback {
                 final String apiKeyValue = trimOrEmpty(draft.apiKey);
                 final String modelValue = trimOrEmpty(draft.model);
                 final String languageValue = trimOrEmpty(language[0]);
-                final String systemPromptValue = trimOrEmpty(systemPrompt[0]);
+                final String systemPromptValue =
+                        customSystemPromptFromDialog(systemPrompt[0]);
                 final boolean autoTranslateEnabled = includeAutoToggle
                         ? autoTranslateToggle.isChecked() : settings.autoTranslate;
                 boolean requiresApiKey = !configOnly || autoTranslateEnabled;
@@ -2484,10 +2570,26 @@ public final class LrclibFallback {
                                 : playerFragment == null ? null : playerFragment.get();
                         ensureLyricsMode(activeFragment);
                         Object activeSong = currentSongFromPlayer(activeFragment);
-                        if (activeSong != null) autoTranslateIfEnabled(ctx, activeSong);
+                        if (activeSong != null
+                                && autoTranslateIfEnabled(ctx, activeSong)) {
+                            SourceSnapshot activeSource = translationSourceFor(activeSong);
+                            if (activeSource != null) {
+                                renderTranslationPending(activeSong, activeSource.callback);
+                            }
+                        }
                         Toast.makeText(ctx, tr("auto_translate_enabled"),
                                 Toast.LENGTH_SHORT).show();
                     } else if (includeAutoToggle) {
+                        if (settings.autoTranslate) {
+                            Object activeFragment = fragmentObj != null
+                                    ? fragmentObj
+                                    : playerFragment == null ? null : playerFragment.get();
+                            Object activeSong = currentSongFromPlayer(activeFragment);
+                            if (activeSong != null) {
+                                renderOriginalLyricsIfCurrent(activeSong,
+                                        translationSourceFor(activeSong));
+                            }
+                        }
                         Toast.makeText(ctx, tr("auto_translate_disabled"),
                                 Toast.LENGTH_SHORT).show();
                     } else {
@@ -2785,36 +2887,64 @@ public final class LrclibFallback {
         return arabicLetters >= 3 && arabicLetters * 2 >= allLetters;
     }
 
-    private static void autoTranslateIfEnabled(final Context ctx, final Object song) {
+    private static boolean hasConfiguredAutomaticTranslation(Context ctx) {
+        if (ctx == null) return false;
+        TranslationSettings settings = readTranslationSettings(ctx);
+        return settings.autoTranslate && !settings.apiKey.trim().isEmpty()
+                && !settings.model.trim().isEmpty() && !settings.language.trim().isEmpty();
+    }
+
+    private static boolean canAutoTranslate(TranslationSettings settings,
+                                            SourceSnapshot snapshot) {
+        return settings != null && settings.autoTranslate
+                && !settings.apiKey.trim().isEmpty()
+                && !settings.model.trim().isEmpty()
+                && !settings.language.trim().isEmpty()
+                && snapshot != null && !snapshot.lines.isEmpty()
+                && !isArabicScriptSource(snapshot.lines)
+                && snapshot.lines.size() <= MAX_TRANSLATION_LINES
+                && sourceCharacterCount(snapshot.lines) <= MAX_TRANSLATION_CHARS;
+    }
+
+    private static boolean sameTranslationSettings(TranslationSettings left,
+                                                   TranslationSettings right) {
+        return left.provider == right.provider && left.apiKey.equals(right.apiKey)
+                && left.model.equals(right.model) && left.language.equals(right.language)
+                && left.systemPrompt.equals(right.systemPrompt)
+                && left.autoTranslate == right.autoTranslate;
+    }
+
+    private static boolean autoTranslateIfEnabled(final Context ctx, final Object song) {
         try {
-            if (ctx == null || song == null) return;
+            if (ctx == null || song == null) return false;
             final TranslationSettings settings = readTranslationSettings(ctx);
-            if (!settings.autoTranslate || settings.apiKey.trim().isEmpty()
-                    || settings.model.trim().isEmpty()
-                    || settings.language.trim().isEmpty()) return;
             final SourceSnapshot snapshot = translationSourceFor(song);
-            if (snapshot == null || snapshot.lines.isEmpty()
-                    || isArabicScriptSource(snapshot.lines)
-                    || snapshot.lines.size() > MAX_TRANSLATION_LINES
-                    || sourceCharacterCount(snapshot.lines) > MAX_TRANSLATION_CHARS) {
-                return;
-            }
+            if (!canAutoTranslate(settings, snapshot)) return false;
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
                     TranslationSettings current = readTranslationSettings(ctx);
-                    if (!current.autoTranslate || current.apiKey.trim().isEmpty()
-                            || current.model.trim().isEmpty()
-                            || current.language.trim().isEmpty()) return;
                     SourceSnapshot latest = translationSourceFor(song);
                     if (latest == null || !latest.songId.equals(snapshot.songId)
                             || !sameSourceLines(latest.lines, snapshot.lines)) return;
+                    if (!sameTranslationSettings(settings, current)) {
+                        if (!autoTranslateIfEnabled(ctx, song)) {
+                            renderOriginalLyricsIfCurrent(song, snapshot);
+                        }
+                        return;
+                    }
+                    if (!canAutoTranslate(current, latest)) {
+                        renderOriginalLyricsIfCurrent(song, snapshot);
+                        return;
+                    }
                     translateAndRender(ctx, song, latest, current.provider, current.apiKey,
                             current.model, current.language, current.systemPrompt, false);
                 }
             });
+            return true;
         } catch (Throwable t) {
             Log.d(TAG, "autoTranslateIfEnabled failed: " + t);
+            return false;
         }
     }
 
@@ -2844,6 +2974,7 @@ public final class LrclibFallback {
                     language, systemPrompt);
         } catch (Exception e) {
             Toast.makeText(ctx, tr("translation_failed"), Toast.LENGTH_SHORT).show();
+            if (!interactive) renderOriginalLyricsIfCurrent(song, snapshot);
             return;
         }
         final String requestKey = cacheKey + "|" + snapshot.songId;
@@ -2865,6 +2996,7 @@ public final class LrclibFallback {
                 translationRequestsInFlight.remove(requestKey);
             }
             Log.d(TAG, "could not show translation progress: " + t);
+            if (!interactive) renderOriginalLyricsIfCurrent(song, snapshot);
             return;
         }
         new Thread(new Runnable() {
@@ -2895,21 +3027,7 @@ public final class LrclibFallback {
                         } catch (Throwable ignored) {
                         }
                         try {
-                            // A response for a previous provider/model must not replace
-                            // the result requested after changing translation settings.
                             TranslationSettings selected = readTranslationSettings(ctx);
-                            if (selected.provider != provider || !selected.model.equals(model)
-                                    || !selected.language.equals(language)
-                                    || !selected.systemPrompt.equals(systemPrompt)
-                                    || (!interactive && !selected.autoTranslate)) return;
-                            if (error != null || result == null) {
-                                String message = tr("translation_failed");
-                                if (error != null && !error.trim().isEmpty()) {
-                                    message += ": " + error;
-                                }
-                                Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
-                                return;
-                            }
                             SourceSnapshot current = translationSourceFor(song);
                             if (current == null || !current.songId.equals(snapshot.songId)
                                     || !sameSourceLines(current.lines, snapshot.lines)) {
@@ -2917,6 +3035,28 @@ public final class LrclibFallback {
                                     Toast.makeText(ctx, tr("source_changed"),
                                             Toast.LENGTH_SHORT).show();
                                 }
+                                return;
+                            }
+                            boolean settingsMatch = selected.provider == provider
+                                    && selected.apiKey.equals(apiKey)
+                                    && selected.model.equals(model)
+                                    && selected.language.equals(language)
+                                    && selected.systemPrompt.equals(systemPrompt)
+                                    && (interactive || selected.autoTranslate);
+                            if (!settingsMatch) {
+                                if (!interactive
+                                        && !autoTranslateIfEnabled(ctx, song)) {
+                                    renderOriginalLyricsIfCurrent(song, current);
+                                }
+                                return;
+                            }
+                            if (error != null || result == null) {
+                                String message = tr("translation_failed");
+                                if (error != null && !error.trim().isEmpty()) {
+                                    message += ": " + error;
+                                }
+                                Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
+                                if (!interactive) renderOriginalLyricsIfCurrent(song, current);
                                 return;
                             }
                             renderDualLines(song, current.callback, snapshot, result);
@@ -2952,9 +3092,7 @@ public final class LrclibFallback {
             throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         String cacheHeader = model + "\n" + language + "\n" + source.synced + "\n";
-        if (systemPrompt != null && !systemPrompt.trim().isEmpty()) {
-            cacheHeader += systemPrompt.trim() + "\n";
-        }
+        cacheHeader += translationSystemPrompt(systemPrompt, source.lines.size()) + "\n";
         digest.update(cacheHeader.getBytes("UTF-8"));
         for (Line line : source.lines) {
             digest.update(String.valueOf(line.ms).getBytes("UTF-8"));
@@ -2966,6 +3104,21 @@ public final class LrclibFallback {
         StringBuilder hex = new StringBuilder("translation_");
         for (byte value : bytes) hex.append(String.format(Locale.ROOT, "%02x", value & 0xff));
         return hex.toString();
+    }
+
+    private static String translationSystemPrompt(String customPrompt, int lineCount) {
+        String instructions = DEFAULT_TRANSLATION_SYSTEM_PROMPT
+                .replace("{lineCount}", String.valueOf(lineCount))
+                + "\n\nRead all supplied lines together as one song and use context to resolve "
+                + "pronouns, idioms, references, tone, and ambiguity. Make translations natural "
+                + "for music listening while staying faithful to meaning, tense, names, "
+                + "punctuation, and repeated hooks. Preserve text already in the target language "
+                + "verbatim, including target-language parts of mixed lines.";
+        String custom = trimOrEmpty(customPrompt);
+        if (!custom.isEmpty()) {
+            instructions += ADDITIONAL_PROMPT_MARKER + custom;
+        }
+        return instructions;
     }
 
     private static List<String> readTranslationCache(Context ctx, String key, int count) {
@@ -3007,20 +3160,7 @@ public final class LrclibFallback {
         request.put("model", model);
         if (provider == TranslationProvider.OPENROUTER) request.put("temperature", 0.1);
         request.put("stream", false);
-        String systemInstructions = "You are a lyrics localization engine. Read all supplied "
-                + "lines together as one song and use their context to resolve "
-                + "pronouns, idioms, references, tone, and ambiguity.";
-        if (systemPrompt != null && !systemPrompt.trim().isEmpty()) {
-            systemInstructions += "\n\nAdditional user instructions:\n"
-                    + systemPrompt.trim();
-        }
-        systemInstructions += " Return only JSON matching the requested schema. Do not explain, "
-                + "think aloud, use markdown, merge lines, split lines, or add notes. Return "
-                + "exactly " + source.size() + " strings in `translations`, preserving input "
-                + "order. Empty input lines must stay empty. Make translations natural for "
-                + "music listening while staying faithful to meaning, tense, names, punctuation, "
-                + "and repeated hooks. Preserve text already in the target language verbatim, "
-                + "including target-language parts of mixed lines.";
+        String systemInstructions = translationSystemPrompt(systemPrompt, source.size());
         JSONArray messages = new JSONArray();
         messages.put(new JSONObject()
                 .put("role", "system")
@@ -3032,7 +3172,7 @@ public final class LrclibFallback {
                         + "before translating, but return one translation per source line. "
                         + "Keep line order, repeated hooks, names, punctuation, and empty "
                         + "lines. Return exactly " + source.size() + " output lines in a "
-                        + "JSON object with a string array named `translations`.\n\n"
+                        + "JSON object with a string array named `lines`.\n\n"
                         + "{\"lines\":" + inputLines.toString() + "}"));
         request.put("messages", messages);
 
@@ -3045,7 +3185,8 @@ public final class LrclibFallback {
             try {
                 JSONObject attempt = new JSONObject(request.toString());
                 if (outputMode > 0) {
-                    attempt.put("response_format", translationResponseFormat(outputMode));
+                    attempt.put("response_format",
+                            translationResponseFormat(outputMode, source.size()));
                 }
                 connection = (HttpURLConnection) new URL(provider.completionsUrl).openConnection();
                 connection.setRequestMethod("POST");
@@ -3089,16 +3230,18 @@ public final class LrclibFallback {
         throw lastError == null ? new Exception(provider.displayName + " request failed") : lastError;
     }
 
-    private static JSONObject translationResponseFormat(int mode) throws Exception {
+    private static JSONObject translationResponseFormat(int mode, int lineCount) throws Exception {
         if (mode == 1) return new JSONObject().put("type", "json_object");
 
         JSONObject stringSchema = new JSONObject()
                 .put("type", "array")
+                .put("minItems", lineCount)
+                .put("maxItems", lineCount)
                 .put("items", new JSONObject().put("type", "string"));
         JSONObject schema = new JSONObject()
                 .put("type", "object")
-                .put("properties", new JSONObject().put("translations", stringSchema))
-                .put("required", new JSONArray().put("translations"))
+                .put("properties", new JSONObject().put("lines", stringSchema))
+                .put("required", new JSONArray().put("lines"))
                 .put("additionalProperties", false);
         return new JSONObject()
                 .put("type", "json_schema")
@@ -3155,14 +3298,8 @@ public final class LrclibFallback {
             content = content.replaceFirst("^```(?:json)?\\s*", "")
                     .replaceFirst("\\s*```$", "").trim();
         }
-        JSONArray translated;
-        if (content.startsWith("[")) {
-            translated = new JSONArray(content);
-        } else {
-            JSONObject result = new JSONObject(content);
-            translated = result.optJSONArray("translations");
-            if (translated == null) translated = result.optJSONArray("lines");
-        }
+        JSONObject result = new JSONObject(content);
+        JSONArray translated = result.optJSONArray("lines");
         if (translated == null || translated.length() != source.size()) {
             throw new Exception("Model returned a different number of lines");
         }
@@ -3184,6 +3321,39 @@ public final class LrclibFallback {
         return out;
     }
 
+    private static void renderTranslationPending(final Object song,
+                                                final Object callback) {
+        if (song == null || callback == null) return;
+        Runnable render = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String message = tr("translation_pending");
+                    Object response = buildResponse(song, message, null);
+                    if (response == null) return;
+                    invokeRender(callback, song, buildLines(response, message, null), response);
+                } catch (Throwable t) {
+                    Log.d(TAG, "could not render translation-pending state: " + t);
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            render.run();
+        } else {
+            new Handler(Looper.getMainLooper()).post(render);
+        }
+    }
+
+    private static void renderOriginalLyricsIfCurrent(Object song, SourceSnapshot expected) {
+        if (song == null || expected == null) return;
+        SourceSnapshot current = translationSourceFor(song);
+        if (current == null || !current.songId.equals(expected.songId)
+                || !sameSourceLines(current.lines, expected.lines)) return;
+        List<String> noTranslations = new ArrayList<String>();
+        for (int i = 0; i < current.lines.size(); i++) noTranslations.add("");
+        renderDualLines(song, current.callback, current, noTranslations);
+    }
+
     private static void renderDualLines(Object song, Object callback,
                                         SourceSnapshot source,
                                         List<String> translated) {
@@ -3193,10 +3363,12 @@ public final class LrclibFallback {
             List<Object> displayLines = new ArrayList<Object>();
             StringBuilder unsynced = new StringBuilder();
             int previousMs = -1;
+            boolean hasTranslation = false;
             for (int i = 0; i < source.lines.size(); i++) {
                 Line original = source.lines.get(i);
                 String translation = translated.get(i) == null ? "" : translated.get(i);
                 String text = original.text == null ? "" : original.text;
+                if (!translation.trim().isEmpty()) hasTranslation = true;
                 String dual = translation.trim().isEmpty()
                         ? text : text + "\n" + translation;
                 Object line = lineClass.newInstance();
@@ -3228,7 +3400,9 @@ public final class LrclibFallback {
             } catch (Exception ignored) {
             }
             invokeRender(callback, song, displayLines, response);
-            Log.d(TAG, "Dual-line translation rendered");
+            Log.d(TAG, hasTranslation
+                    ? "Dual-line translation rendered"
+                    : "Original lyrics restored after automatic translation");
         } catch (Throwable t) {
             Log.d(TAG, "dual-line render failed: " + t);
         }
