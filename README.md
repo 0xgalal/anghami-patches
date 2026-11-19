@@ -73,8 +73,10 @@ Enable **AI lyrics translation · OpenRouter** in Morphe. It includes
 **Lyrics options in Settings** and the LRCLIB fallback patch it depends on.
 In the player, long-press the **Lyrics** button and enable automatic
 translation. If needed, enter an OpenRouter API key, model ID, and target
-language. Choose from the built-in OpenRouter model list or enter a custom model
-ID; the default is `inception/mercury-2.5-preview`. The default target language
+language. The model picker fetches OpenRouter's current free models and labels
+them; if the catalog cannot be reached, it falls back to the built-in list.
+You can also enter a custom model ID. The default is
+`inception/mercury-2.5-preview`. The default target language
 is Arabic on Arabic-locale devices or English otherwise. Enabling auto-translate
 turns on Lyrics mode and translates lyrics as they load, with no per-song
 Translate action. Predominantly Arabic-script lyrics are skipped.

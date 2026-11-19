@@ -85,9 +85,11 @@ public final class LrclibFallback {
     private static final String TRANSLATION_PREFS = "lyrics_openrouter";
     private static final String OPENROUTER_URL =
             "https://openrouter.ai/api/v1/chat/completions";
+    private static final String OPENROUTER_MODELS_URL =
+            "https://openrouter.ai/api/v1/models";
     private static final String DEFAULT_OPENROUTER_MODEL =
             "inception/mercury-2.5-preview";
-    private static final String[] OPENROUTER_MODELS = {
+    private static final String[] FALLBACK_OPENROUTER_MODELS = {
             "inception/mercury-2.5-preview",
             "meta/muse-spark-1.3",
             "z-ai/glm-5.3-flash",
@@ -1263,6 +1265,16 @@ public final class LrclibFallback {
             if (fr) return "Choisir un modèle";
             return "Select model";
         }
+        if ("fetching_models".equals(key)) {
+            if (ar) return "جارٍ جلب النماذج المجانية من OpenRouter…";
+            if (fr) return "Chargement des modèles gratuits depuis OpenRouter…";
+            return "Fetching free models from OpenRouter…";
+        }
+        if ("models_fetch_failed".equals(key)) {
+            if (ar) return "تعذر جلب النماذج المجانية؛ يتم عرض القائمة الاحتياطية";
+            if (fr) return "Impossible de charger les modèles gratuits ; liste de secours affichée";
+            return "Couldn't fetch free models; showing the built-in list";
+        }
         if ("edit_model".equals(key)) {
             if (ar) return "معرّف نموذج مخصص";
             if (fr) return "Identifiant de modèle personnalisé";
@@ -2431,6 +2443,24 @@ public final class LrclibFallback {
         void onModelSelected(String model);
     }
 
+    private static final class OpenRouterModel {
+        final String id;
+        final String name;
+        final boolean free;
+
+        OpenRouterModel(String id, String name, boolean free) {
+            this.id = id;
+            this.name = name;
+            this.free = free;
+        }
+
+        String displayName() {
+            String label = name == null || name.trim().isEmpty() ? id : name.trim();
+            if (!label.equals(id)) label += " — " + id;
+            return free ? label + " · FREE" : label;
+        }
+    }
+
     private static int dp(Context ctx, int value) {
         return (int) (value * ctx.getResources().getDisplayMetrics().density + 0.5f);
     }
@@ -2542,22 +2572,140 @@ public final class LrclibFallback {
 
     private static void showModelSelector(final Context ctx, final String currentModel,
                                           final ModelSelectionListener listener) {
-        final String[] choices = new String[OPENROUTER_MODELS.length + 1];
-        System.arraycopy(OPENROUTER_MODELS, 0, choices, 0, OPENROUTER_MODELS.length);
-        choices[OPENROUTER_MODELS.length] = tr("model_custom");
-        int selected = modelIndex(currentModel);
+        final ProgressDialog progress = new ProgressDialog(ctx);
+        progress.setMessage(tr("fetching_models"));
+        progress.setCancelable(false);
+        progress.show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                List<OpenRouterModel> models = null;
+                boolean fetchFailed = false;
+                try {
+                    models = fetchFreeOpenRouterModels();
+                    if (models.isEmpty()) fetchFailed = true;
+                } catch (Throwable t) {
+                    fetchFailed = true;
+                    Log.d(TAG, "OpenRouter model catalog fetch failed: " + t);
+                }
+                final List<OpenRouterModel> result = models == null || models.isEmpty()
+                        ? fallbackOpenRouterModels() : models;
+                final boolean showFallbackMessage = fetchFailed;
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (progress.isShowing()) progress.dismiss();
+                        } catch (Throwable ignored) {
+                        }
+                        if (showFallbackMessage) {
+                            Toast.makeText(ctx, tr("models_fetch_failed"),
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                        showModelSelectorDialog(ctx, currentModel, listener, result);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private static List<OpenRouterModel> fetchFreeOpenRouterModels() throws Exception {
+        HttpURLConnection connection = null;
+        BufferedReader reader = null;
+        try {
+            connection = (HttpURLConnection) new URL(OPENROUTER_MODELS_URL).openConnection();
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("User-Agent", "AnghamiLyricsFallback/1.0");
+            connection.setConnectTimeout(HTTP_TIMEOUT_MS);
+            connection.setReadTimeout(HTTP_TIMEOUT_MS);
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) {
+                throw new Exception("OpenRouter returned HTTP " + status);
+            }
+
+            reader = new BufferedReader(new InputStreamReader(
+                    connection.getInputStream(), "UTF-8"));
+            StringBuilder body = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) body.append(line);
+            JSONArray data = new JSONObject(body.toString()).optJSONArray("data");
+            List<OpenRouterModel> models = new ArrayList<OpenRouterModel>();
+            Set<String> seen = new HashSet<String>();
+            if (data == null) return models;
+            for (int i = 0; i < data.length(); i++) {
+                JSONObject model = data.optJSONObject(i);
+                if (model == null) continue;
+                String id = model.optString("id", "").trim();
+                if (id.isEmpty() || !seen.add(id)) continue;
+                JSONObject pricing = model.optJSONObject("pricing");
+                boolean free = id.endsWith(":free")
+                        || (pricing != null
+                        && isZeroPrice(pricing.optString("prompt", null))
+                        && isZeroPrice(pricing.optString("completion", null)));
+                if (!free) continue;
+                String name = model.optString("name", id).trim();
+                models.add(new OpenRouterModel(id,
+                        name.isEmpty() ? id : name, true));
+            }
+            Collections.sort(models, new Comparator<OpenRouterModel>() {
+                @Override
+                public int compare(OpenRouterModel left, OpenRouterModel right) {
+                    int byName = left.name.compareToIgnoreCase(right.name);
+                    return byName != 0 ? byName : left.id.compareToIgnoreCase(right.id);
+                }
+            });
+            return models;
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (Exception ignored) {
+                }
+            }
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static boolean isZeroPrice(String value) {
+        if (value == null) return false;
+        try {
+            return Double.parseDouble(value.trim()) == 0.0d;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private static List<OpenRouterModel> fallbackOpenRouterModels() {
+        List<OpenRouterModel> models =
+                new ArrayList<OpenRouterModel>(FALLBACK_OPENROUTER_MODELS.length);
+        for (String model : FALLBACK_OPENROUTER_MODELS) {
+            models.add(new OpenRouterModel(model, model, false));
+        }
+        return models;
+    }
+
+    private static void showModelSelectorDialog(final Context ctx, final String currentModel,
+                                                final ModelSelectionListener listener,
+                                                final List<OpenRouterModel> models) {
+        final String[] choices = new String[models.size() + 1];
+        for (int i = 0; i < models.size(); i++) {
+            choices[i] = models.get(i).displayName();
+        }
+        choices[models.size()] = tr("model_custom");
+        int selected = modelIndex(currentModel, models);
         final AlertDialog selector = new AlertDialog.Builder(ctx)
                 .setTitle(tr("model_selector_title"))
                 .setSingleChoiceItems(choices, selected, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        if (which < OPENROUTER_MODELS.length) {
-                            listener.onModelSelected(OPENROUTER_MODELS[which]);
+                        if (which < models.size()) {
+                            listener.onModelSelected(models.get(which).id);
                             dialog.dismiss();
                             return;
                         }
                         dialog.dismiss();
-                        String customInitial = modelIndex(currentModel) == OPENROUTER_MODELS.length
+                        String customInitial = modelIndex(currentModel, models) == models.size()
                                 ? currentModel : "";
                         showTextSettingDialog(ctx, tr("edit_model"), customInitial,
                                 android.text.InputType.TYPE_CLASS_TEXT
@@ -2580,13 +2728,13 @@ public final class LrclibFallback {
         selector.show();
     }
 
-    private static int modelIndex(String model) {
+    private static int modelIndex(String model, List<OpenRouterModel> models) {
         if (model != null) {
-            for (int i = 0; i < OPENROUTER_MODELS.length; i++) {
-                if (OPENROUTER_MODELS[i].equals(model)) return i;
+            for (int i = 0; i < models.size(); i++) {
+                if (models.get(i).id.equals(model)) return i;
             }
         }
-        return OPENROUTER_MODELS.length;
+        return models.size();
     }
 
     private static int sourceCharacterCount(List<Line> lines) {
