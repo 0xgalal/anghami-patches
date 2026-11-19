@@ -1,3 +1,9 @@
+## [1.9.0](https://github.com/0xgalal/anghami-patches/compare/v1.8.0...v1.9.0) (2026-11-19)
+
+### ✨ New Features
+
+* add xKiro translation provider ([a4f54f3](https://github.com/0xgalal/anghami-patches/commit/a4f54f3f3ea80d6929287018c3ea2d54385b0437))
+
 ## [1.8.0](https://github.com/0xgalal/anghami-patches/compare/v1.7.0...v1.8.0) (2026-11-19)
 
 ### 🐛 Bug Fixes

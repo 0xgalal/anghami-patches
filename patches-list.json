@@ -1,10 +1,10 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "patches": [
     {
-      "name": "AI lyrics translation · OpenRouter / OpenCode",
-      "description": "Adds optional automatic lyric translation via OpenRouter or OpenCode, shown beneath each original line. Long-press the player Lyrics button to choose a provider and configure it.",
+      "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
+      "description": "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro, shown beneath each original line. Long-press the player Lyrics button to choose a provider and configure it.",
       "default": false,
       "category": null,
       "dependencies": [
