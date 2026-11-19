@@ -67,17 +67,25 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 Fingerprints pin 8.0.28 method shapes — re-verify them against a fresh decode
 before using these patches on any other app version.
 
-### AI lyrics translation via OpenRouter
+### AI lyrics translation via OpenRouter or OpenCode
 
-Enable **AI lyrics translation · OpenRouter** in Morphe. It includes
+Enable **AI lyrics translation · OpenRouter / OpenCode** in Morphe. It includes
 **Lyrics options in Settings** and the LRCLIB fallback patch it depends on.
 In the player, long-press the **Lyrics** button and enable automatic
-translation. If needed, enter an OpenRouter API key, model ID, and target
-language. The model picker fetches OpenRouter's current free models and labels
-them; if the catalog cannot be reached, it falls back to the built-in list.
-You can also enter a custom model ID. The default is
-`inception/mercury-2.5-preview`. The default target language
-is Arabic on Arabic-locale devices or English otherwise. Enabling auto-translate
+translation. Tap **Provider** to select **OpenRouter** or **OpenCode**, then enter
+that provider's API key, model ID, and target language. Keys and selected models
+are saved separately for each provider.
+
+The model picker fetches OpenRouter's current free models or OpenCode's
+externally usable chat models. If the catalog cannot be reached, it uses that
+provider's built-in list. Custom model IDs are also supported. Defaults are
+`inception/mercury-2.5-preview` for OpenRouter and `glm-5.3-flash` for OpenCode.
+OpenCode uses a [Console API key](https://opencode.ai/docs/console/harnesses)
+with pay-as-you-go credits. Its free-tier chat models are restricted to the
+OpenCode app and cannot be used from Anghami.
+
+The default target language is Arabic on Arabic-locale devices or English
+otherwise. Enabling auto-translate
 turns on Lyrics mode and translates lyrics as they load, with no per-song
 Translate action. Predominantly Arabic-script lyrics are skipped.
 **Settings > Lyrics** remains available for manual lyrics actions.
@@ -86,10 +94,10 @@ The original lyrics remain intact. Each translation is displayed beneath its
 source line, using the source line’s timestamp for synchronized lyrics.
 The full lyric is translated together as context, and the result is checked
 for one aligned translation per source line.
-The auto-translation choice, API key, model, target language, optional extra
+The auto-translation choice, provider, API keys, models, target language, optional extra
 system prompt, and cached translations are stored in app-private preferences.
-Translations are cached by lyric, model, target language, and system prompt;
-only uncached lyrics are sent to OpenRouter.
+Translations are cached by lyric, provider, model, target language, and system prompt;
+only uncached lyrics are sent to the selected provider.
 
 ### 🛠️ Building locally
 
