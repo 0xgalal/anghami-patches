@@ -78,6 +78,8 @@ language is Arabic on Arabic-locale devices or English otherwise.
 
 The original lyrics remain intact. Each translation is displayed beneath its
 source line, using the source line’s timestamp for synchronized lyrics.
+The full lyric is translated together as context, and the result is checked
+for one aligned translation per source line.
 Settings, the API key, and cached translations are stored in app-private
 preferences; uncached lyrics are sent to OpenRouter only when translation is
 requested.
