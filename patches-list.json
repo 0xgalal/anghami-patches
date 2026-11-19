@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
@@ -268,40 +268,6 @@
       "default": false,
       "category": null,
       "dependencies": [],
-      "compatiblePackages": [
-        {
-          "packageName": "com.anghami",
-          "name": "Anghami",
-          "description": null,
-          "apkFileType": "APKM",
-          "appIconColor": "#A020F0",
-          "signatures": null,
-          "targets": [
-            {
-              "version": "8.0.28",
-              "versionCodes": {
-                "ARM64_V8A": 8000280,
-                "ARMEABI_V7A": 8000280,
-                "X86": 8000280,
-                "X86_64": 8000280
-              },
-              "isExperimental": false,
-              "minSdk": null,
-              "description": null
-            }
-          ]
-        }
-      ],
-      "options": []
-    },
-    {
-      "name": "Lyrics options in Settings",
-      "description": "Adds a Lyrics entry to Anghami Settings for LRCLIB search and AI translation options. Pulls in 'LRCLIB lyrics fallback'.",
-      "default": false,
-      "category": null,
-      "dependencies": [
-        "BytecodePatch"
-      ],
       "compatiblePackages": [
         {
           "packageName": "com.anghami",

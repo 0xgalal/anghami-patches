@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-19T16:36:12",
-  "description": "## [1.10.0](https://github.com/0xgalal/anghami-patches/compare/v1.9.1...v1.10.0) (2026-11-19)\n\n### 🐛 Bug Fixes\n\n* avoid translating lyrics status messages ([0526ca3](https://github.com/0xgalal/anghami-patches/commit/0526ca32d5ea87e64241d0bc7e9b5ac935869324))\n* reject non-object lyrics translations ([e9193ca](https://github.com/0xgalal/anghami-patches/commit/e9193ca43a932af1448ecc0fd7be08375b1f0417))\n\n### ✨ New Features\n\n* enforce strict lyrics translation output ([c816531](https://github.com/0xgalal/anghami-patches/commit/c8165316871c7dc8f3c6fd7bbc24108dc65232fb))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.10.0/patches-1.10.0.mpp",
+  "created_at": "2026-11-19T17:42:16",
+  "description": "## [1.10.1](https://github.com/0xgalal/anghami-patches/compare/v1.10.0...v1.10.1) (2026-11-19)\n\n### 🔧 Improvements\n\n* speed up LRCLIB lyrics lookup and remove Settings section ([a28775a](https://github.com/0xgalal/anghami-patches/commit/a28775a2013d813c35f3e830c45d0b26c7d4a397))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.10.1/patches-1.10.1.mpp",
   "signature_download_url": "",
-  "version": "1.10.0"
+  "version": "1.10.1"
 }

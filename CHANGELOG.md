@@ -1,3 +1,9 @@
+## [1.10.1](https://github.com/0xgalal/anghami-patches/compare/v1.10.0...v1.10.1) (2026-11-19)
+
+### 🔧 Improvements
+
+* speed up LRCLIB lyrics lookup and remove Settings section ([a28775a](https://github.com/0xgalal/anghami-patches/commit/a28775a2013d813c35f3e830c45d0b26c7d4a397))
+
 ## [1.10.0](https://github.com/0xgalal/anghami-patches/compare/v1.9.1...v1.10.0) (2026-11-19)
 
 ### 🐛 Bug Fixes
