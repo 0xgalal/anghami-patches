@@ -1,3 +1,9 @@
+## [1.9.1](https://github.com/0xgalal/anghami-patches/compare/v1.9.0...v1.9.1) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* parse spaced Gradle version in release recovery ([9f293c5](https://github.com/0xgalal/anghami-patches/commit/9f293c5981ef2addcb7d9eec1b1c960742229618))
+
 ## [1.9.0](https://github.com/0xgalal/anghami-patches/compare/v1.8.0...v1.9.0) (2026-11-19)
 
 ### ✨ New Features
