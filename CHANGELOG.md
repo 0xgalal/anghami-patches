@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/0xgalal/anghami-patches/compare/v1.3.4...v1.4.0) (2026-11-19)
+
+### ✨ New Features
+
+* add lyrics options to Settings ([760c28b](https://github.com/0xgalal/anghami-patches/commit/760c28b038b08cb3fdd6ac034121721afb56d7f3))
+
 ## [1.3.4](https://github.com/0xgalal/anghami-patches/compare/v1.3.3...v1.3.4) (2026-11-19)
 
 ### 🐛 Bug Fixes

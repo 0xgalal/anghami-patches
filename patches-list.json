@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.3.4",
+  "version": "1.4.0",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter",
@@ -295,8 +295,8 @@
       "options": []
     },
     {
-      "name": "Lyrics options on play long-press",
-      "description": "Long-press play/pause for lyrics options (retry, LRCLIB search, synced/plain toggle, server version) instead of the sleep timer. Pulls in 'LRCLIB lyrics fallback'.",
+      "name": "Lyrics options in Settings",
+      "description": "Adds a Lyrics entry to Anghami Settings for LRCLIB search and AI translation options. Pulls in 'LRCLIB lyrics fallback'.",
       "default": false,
       "category": null,
       "dependencies": [
