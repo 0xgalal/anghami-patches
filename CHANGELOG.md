@@ -1,3 +1,9 @@
+## [1.10.6](https://github.com/0xgalal/anghami-patches/compare/v1.10.5...v1.10.6) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* drop gradlew.bat from release commit assets ([f5dc4d1](https://github.com/0xgalal/anghami-patches/commit/f5dc4d1c0e330f6a05fcd0ed2f735ce899f80ed4))
+
 ## [1.10.5](https://github.com/0xgalal/anghami-patches/compare/v1.10.4...v1.10.5) (2026-11-19)
 
 ### 🐛 Bug Fixes
