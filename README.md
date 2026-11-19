@@ -66,6 +66,20 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 Fingerprints pin 8.0.28 method shapes — re-verify them against a fresh decode
 before using these patches on any other app version.
 
+### Lyrics sources
+
+When Anghami returns truncated or empty lyrics, the fallback looks for full
+synced lyrics in this order and stops at the first match:
+
+1. **LRCLIB** — open, key-less database; best coverage for Western pop.
+2. **KuGou** — large CJK catalogue (Mandarin, Cantonese, Japanese, Korean).
+3. **LyricsPlus** — aggregator querying Apple, Musixmatch and Spotify.
+4. **Better Lyrics** — Apple TTML with tight line timings.
+5. **Paxsenix** — Apple Music catalogue search plus track lyrics.
+
+Each source is optional: a timeout or error just moves on to the next one.
+Results are cached per song, so a miss is only paid once.
+
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 
 Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It pulls in
