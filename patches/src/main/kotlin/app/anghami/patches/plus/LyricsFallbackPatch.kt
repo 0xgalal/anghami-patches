@@ -225,8 +225,9 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
 
     execute {
         // Run after substituteCached so the helper sees the actual full lyrics
-        // (native or cached LRCLIB), then stop this render while auto
-        // translation is pending. It paints a small pending state instead.
+        // (native or cached LRCLIB). The helper swaps full native lyrics for a
+        // short pending message; native rendering still completes so its
+        // loading state is cleared. Never short-circuit this method.
         val success = LyricsSuccessFingerprint.method
         val substituteCalls = success.implementation!!.instructions.mapIndexedNotNull { index, ins ->
             if (ins.opcode == Opcode.INVOKE_STATIC && ins is Instruction35c &&
@@ -245,11 +246,7 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
         success.addInstructions(
             substituteCalls[0] + 1,
             """
-                invoke-static {p0, p1, p3}, $FALLBACK_HELPER->deferLyricsForTranslation(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z
-                move-result v0
-                if-eqz v0, :ai_translation_render_continue
-                return-void
-                :ai_translation_render_continue
+                invoke-static {p0, p1, p3}, $FALLBACK_HELPER->deferLyricsForTranslation(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
             """
         )
 
