@@ -3294,13 +3294,10 @@ public final class LrclibFallback {
         } else {
             throw new Exception("Translation provider returned unsupported content");
         }
-        if (content.startsWith("```")) {
-            content = content.replaceFirst("^```(?:json)?\\s*", "")
-                    .replaceFirst("\\s*```$", "").trim();
-        }
         JSONObject result = new JSONObject(content);
         JSONArray translated = result.optJSONArray("lines");
-        if (translated == null || translated.length() != source.size()) {
+        if (result.length() != 1 || translated == null
+                || translated.length() != source.size()) {
             throw new Exception("Model returned a different number of lines");
         }
         List<String> out = new ArrayList<String>();

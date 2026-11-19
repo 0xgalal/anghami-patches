@@ -256,13 +256,22 @@ public class TranslationRequestTest {
     public void parserRejectsResponsesThatDoNotUseLinesObject() throws Exception {
         String legacyContent = new JSONObject()
                 .put("translations", new JSONArray().put("Bonjour")).toString();
-        String body = new JSONObject().put("choices", new JSONArray().put(new JSONObject()
-                .put("finish_reason", "stop")
-                .put("message", new JSONObject().put("content", legacyContent)))).toString();
-        responses.add(new Response(200, body));
+        responses.add(new Response(200, completionWithContent(legacyContent)));
         Exception error = assertThrows(Exception.class,
                 () -> translate(TranslationProvider.XKIRO, "test-key"));
         assertEquals("Model returned a different number of lines", error.getMessage());
+    }
+
+    @Test
+    public void parserRejectsExtraKeysAndMarkdownWrappedJson() throws Exception {
+        String extraKey = new JSONObject().put("lines", new JSONArray().put("Bonjour"))
+                .put("note", "Here is the translation").toString();
+        responses.add(new Response(200, completionWithContent(extraKey)));
+        assertThrows(Exception.class, () -> translate(TranslationProvider.XKIRO, "test-key"));
+
+        responses.add(new Response(200, completionWithContent(
+                "```json\n{\"lines\":[\"Bonjour\"]}\n```")));
+        assertThrows(Exception.class, () -> translate(TranslationProvider.XKIRO, "test-key"));
     }
 
     private static List<?> translate(TranslationProvider provider, String key) throws Exception {
@@ -279,6 +288,10 @@ public class TranslationRequestTest {
     private static String success(String... lines) throws Exception {
         String content = new JSONObject().put("lines", new JSONArray(Arrays.asList(lines)))
                 .toString();
+        return completionWithContent(content);
+    }
+
+    private static String completionWithContent(String content) throws Exception {
         return new JSONObject().put("choices", new JSONArray().put(new JSONObject()
                 .put("finish_reason", "stop")
                 .put("message", new JSONObject().put("content", content)))).toString();
