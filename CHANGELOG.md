@@ -1,3 +1,9 @@
+## [1.5.0](https://github.com/0xgalal/anghami-patches/compare/v1.4.0...v1.5.0) (2026-11-19)
+
+### ✨ New Features
+
+* add automatic lyrics translation ([#5](https://github.com/0xgalal/anghami-patches/issues/5)) ([206f2ee](https://github.com/0xgalal/anghami-patches/commit/206f2ee6b79dd43fcbb3e20f8a524c03c0396019))
+
 ## [1.4.0](https://github.com/0xgalal/anghami-patches/compare/v1.3.4...v1.4.0) (2026-11-19)
 
 ### ✨ New Features
