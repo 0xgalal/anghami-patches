@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      recover_tag:
+        description: "Build and publish an existing tag whose GitHub release is missing"
+        required: false
+        type: string
   push:
 
 jobs:
@@ -37,6 +42,7 @@ jobs:
       # Semantic release runs its own Gradle build command.
       # Only dev and main branch will generate a release as specified by .releaserc
       - name: Release
+        if: inputs.recover_tag == ''
         uses: cycjimmy/semantic-release-action@v6
         id: release
         env:
@@ -56,3 +62,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./gradlew :patches:buildAndroid clean --no-daemon
+
+      - name: Recover an existing release
+        if: inputs.recover_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOVER_TAG: ${{ inputs.recover_tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RECOVER_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a stable version tag such as v1.9.0"
+            exit 1
+          fi
+
+          if gh release view "$RECOVER_TAG" >/dev/null 2>&1; then
+            echo "::error::A GitHub release already exists for $RECOVER_TAG"
+            exit 1
+          fi
+
+          git fetch origin "refs/tags/$RECOVER_TAG:refs/tags/$RECOVER_TAG"
+          git checkout --detach "$RECOVER_TAG"
+
+          version="${RECOVER_TAG#v}"
+          tagged_version="$(sed -n 's/^version=//p' gradle.properties | head -n 1)"
+          if [[ "$tagged_version" != "$version" ]]; then
+            echo "::error::Tag $RECOVER_TAG contains project version $tagged_version"
+            exit 1
+          fi
+
+          ./gradlew generatePatchesList --no-daemon
+
+          artifact="patches/build/libs/patches-${version}.mpp"
+          if [[ ! -f "$artifact" ]]; then
+            echo "::error::Expected release bundle was not built: $artifact"
+            exit 1
+          fi
+
+          notes_file="$(mktemp)"
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > "$notes_file"
+
+          gh release create "$RECOVER_TAG" "$artifact" \
+            --title "$RECOVER_TAG" \
+            --notes-file "$notes_file"
