@@ -29,6 +29,7 @@ public class TranslationRequestTest {
     private static Method request;
     private static Method parseLyrics;
     private static Method parsePlainLyrics;
+    private static Method isTranslationSourceResult;
 
     @BeforeClass
     public static void interceptHttpRequests() throws Exception {
@@ -49,6 +50,9 @@ public class TranslationRequestTest {
         parseLyrics.setAccessible(true);
         parsePlainLyrics = LrclibFallback.class.getDeclaredMethod("plainLines", String.class);
         parsePlainLyrics.setAccessible(true);
+        isTranslationSourceResult = LrclibFallback.class.getDeclaredMethod(
+                "isTranslationSourceResult", String.class);
+        isTranslationSourceResult.setAccessible(true);
     }
 
     @Before
@@ -250,6 +254,14 @@ public class TranslationRequestTest {
         String editable = (String) forDialog.invoke(null, custom);
         assertTrue(editable.contains("Additional user instructions:\n" + custom));
         assertEquals(custom, fromDialog.invoke(null, editable));
+    }
+
+    @Test
+    public void statusAndTeaserRowsAreNotTreatedAsLyricsToTranslate() throws Exception {
+        assertFalse((Boolean) isTranslationSourceResult.invoke(null, "placeholder"));
+        assertFalse((Boolean) isTranslationSourceResult.invoke(null, "no-result"));
+        assertFalse((Boolean) isTranslationSourceResult.invoke(null, "teaser-guide"));
+        assertTrue((Boolean) isTranslationSourceResult.invoke(null, "lrclib-title"));
     }
 
     @Test

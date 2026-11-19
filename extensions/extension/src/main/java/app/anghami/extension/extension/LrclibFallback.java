@@ -782,6 +782,11 @@ public final class LrclibFallback {
     private static void renderTeaserWithGuide(Context ctx, Object songObj,
                                               Object callbackObj, Object responseObj) {
         try {
+            if (hasConfiguredAutomaticTranslation(ctx)) {
+                renderOnMain(ctx, songObj, callbackObj,
+                        tr("no_result"), null, "no-result", false);
+                return;
+            }
             String teaser = teaserText(responseObj);
             if (teaser == null || teaser.trim().isEmpty()) {
                 renderOnMain(ctx, songObj, callbackObj,
@@ -1852,8 +1857,7 @@ public final class LrclibFallback {
                     try {
                         List<Line> sourceLines = new ArrayList<Line>();
                         boolean sourceSynced = false;
-                        if (!"no-result".equals(queryUsed)
-                                && !"teaser-guide".equals(queryUsed)) {
+                        if (isTranslationSourceResult(queryUsed)) {
                             sourceLines = parseLrc(synced);
                             sourceSynced = !sourceLines.isEmpty()
                                     && (lastPreferSynced || plain == null || plain.isEmpty());
@@ -1863,10 +1867,10 @@ public final class LrclibFallback {
                                 sourceLines = parseLrc(synced);
                                 sourceSynced = !sourceLines.isEmpty();
                             }
+                            deferForTranslation = setTranslationSource(
+                                    readSong(songObj), songObj, callbackObj,
+                                    sourceLines, sourceSynced);
                         }
-                        deferForTranslation = setTranslationSource(
-                                readSong(songObj), songObj, callbackObj,
-                                sourceLines, sourceSynced);
                     } catch (Exception ignored) {
                     }
                     if (deferForTranslation) {
@@ -1884,6 +1888,12 @@ public final class LrclibFallback {
 
     private static boolean syncedIsEmpty(String synced) {
         return synced == null || synced.trim().isEmpty();
+    }
+
+    private static boolean isTranslationSourceResult(String queryUsed) {
+        return !"placeholder".equals(queryUsed)
+                && !"no-result".equals(queryUsed)
+                && !"teaser-guide".equals(queryUsed);
     }
 
     private static Object buildResponse(Object songObj, String plain, String synced) {
