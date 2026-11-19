@@ -85,7 +85,7 @@ jobs:
           git checkout --detach "$RECOVER_TAG"
 
           version="${RECOVER_TAG#v}"
-          tagged_version="$(sed -n 's/^version=//p' gradle.properties | head -n 1)"
+          tagged_version="$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
           if [[ "$tagged_version" != "$version" ]]; then
             echo "::error::Tag $RECOVER_TAG contains project version $tagged_version"
             exit 1
