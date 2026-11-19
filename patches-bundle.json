@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-19T20:17:04",
-  "description": "## [1.10.6](https://github.com/0xgalal/anghami-patches/compare/v1.10.5...v1.10.6) (2026-11-19)\n\n### 🐛 Bug Fixes\n\n* drop gradlew.bat from release commit assets ([f5dc4d1](https://github.com/0xgalal/anghami-patches/commit/f5dc4d1c0e330f6a05fcd0ed2f735ce899f80ed4))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.10.6/patches-1.10.6.mpp",
+  "created_at": "2026-11-19T20:23:01",
+  "description": "## [1.10.7](https://github.com/0xgalal/anghami-patches/compare/v1.10.6...v1.10.7) (2026-11-19)\n\n### 🐛 Bug Fixes\n\n* remove broken post-release backmerge to dev ([05f1d05](https://github.com/0xgalal/anghami-patches/commit/05f1d056c157958c057934348958d9f81931a624))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.10.7/patches-1.10.7.mpp",
   "signature_download_url": "",
-  "version": "1.10.6"
+  "version": "1.10.7"
 }

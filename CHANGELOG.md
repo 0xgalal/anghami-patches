@@ -1,3 +1,9 @@
+## [1.10.7](https://github.com/0xgalal/anghami-patches/compare/v1.10.6...v1.10.7) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* remove broken post-release backmerge to dev ([05f1d05](https://github.com/0xgalal/anghami-patches/commit/05f1d056c157958c057934348958d9f81931a624))
+
 ## [1.10.6](https://github.com/0xgalal/anghami-patches/compare/v1.10.5...v1.10.6) (2026-11-19)
 
 ### 🐛 Bug Fixes
