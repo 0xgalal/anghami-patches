@@ -126,6 +126,10 @@ public final class LrclibFallback {
     private static boolean lastPreferSynced = true;
     private static volatile WeakReference<Object> playerFragment =
             new WeakReference<Object>(null);
+    // Original label of the player's Lyrics button, kept per view so the
+    // " + AI" suffix can be added/removed without stacking on each onResume.
+    private static final Map<Object, String> lyricsButtonLabels =
+            new java.util.WeakHashMap<Object, String>();
     private static final java.util.WeakHashMap<Object, String> renderedKeys =
             new java.util.WeakHashMap<Object, String>();
     private static final Map<String, WeakReference<Object>> lyricsCallbacks =
@@ -161,31 +165,35 @@ public final class LrclibFallback {
     }
 
     /**
-     * Captures lyrics at the render choke point and holds the original render
-     * while a valid automatic translation is being prepared.
+     * Holds native lyrics for automatic translation without aborting the
+     * native render. Returning early from {@code A7/E.b} used to skip its
+     * loading-state cleanup, leaving the spinner up forever. Instead the
+     * source lines are captured and the response is rewritten in place with
+     * a short pending message, so the native method renders that message and
+     * completes normally; the dual-line render replaces it once translation
+     * finishes. Truncated/empty responses are left untouched so the LRCLIB
+     * fallback can still fetch full lyrics for them.
      */
-    public static boolean deferLyricsForTranslation(Object songObj, Object responseObj,
-                                                    Object callbackObj) {
+    public static void deferLyricsForTranslation(Object songObj, Object responseObj,
+                                                 Object callbackObj) {
         try {
-            if (songObj == null || callbackObj == null) return false;
+            if (songObj == null || responseObj == null || callbackObj == null) return;
             Context ctx = appContextOf(callbackObj);
-            if (!hasConfiguredAutomaticTranslation(ctx)) return false;
+            if (!hasConfiguredAutomaticTranslation(ctx)) return;
+            if (!isFullNativeResponse(responseObj)) return;
+            if (!captureNativeLyrics(songObj, responseObj, callbackObj)) return;
 
-            if (responseObj != null && isFullNativeResponse(responseObj)) {
-                boolean defer = captureNativeLyrics(songObj, responseObj, callbackObj);
-                if (defer) renderTranslationPending(songObj, callbackObj);
-                return defer;
+            setLineField(responseObj, "lyricsUnsynced", tr("translation_pending"));
+            setLineField(responseObj, "lyricsSynced", null);
+            setLineField(responseObj, "isSynced", false);
+            setLineField(responseObj, "truncated", true);
+            synchronized (LrclibFallback.class) {
+                substituted.add(responseObj); // impl must not re-own this response.
             }
-            if (responseObj == null || getBoolean(responseObj, "truncated")
-                    || isEmptyResponse(responseObj)) {
-                hideUnlockLyricsButton(callbackObj);
-                renderTranslationPending(songObj, callbackObj);
-                return true;
-            }
+            Log.d(TAG, "native lyrics held for automatic translation");
         } catch (Throwable t) {
             Log.d(TAG, "deferLyricsForTranslation failed: " + t);
         }
-        return false;
     }
 
     private static boolean captureNativeLyrics(Object songObj, Object responseObj,
@@ -265,9 +273,79 @@ public final class LrclibFallback {
                     return true;
                 }
             });
+            applyLyricsButtonLabel((View) targetObj);
         } catch (Throwable t) {
             Log.d(TAG, "installLyricsButtonLongPress failed: " + t);
         }
+    }
+
+    /**
+     * Shows "Lyrics + AI" on the player's Lyrics button while automatic
+     * translation is configured, restoring the native label when it is off.
+     * Safe to call repeatedly (onResume, settings toggles).
+     */
+    private static void applyLyricsButtonLabel(View button) {
+        try {
+            if (button == null || button.getContext() == null) return;
+            boolean active = hasConfiguredAutomaticTranslation(button.getContext());
+            List<TextView> labels = new ArrayList<TextView>();
+            collectLyricsButtonLabels(button, labels, false);
+            if (labels.isEmpty()) {
+                // Locale we do not recognize: fall back to the button's
+                // first non-empty label rather than leaving it unchanged.
+                List<TextView> any = new ArrayList<TextView>();
+                collectLyricsButtonLabels(button, any, true);
+                if (!any.isEmpty()) labels.add(any.get(0));
+            }
+            for (TextView label : labels) {
+                if (active) {
+                    if (!lyricsButtonLabels.containsKey(label)) {
+                        lyricsButtonLabels.put(label, String.valueOf(label.getText()));
+                    }
+                    String original = lyricsButtonLabels.get(label);
+                    String desired = original + " + AI";
+                    if (!desired.contentEquals(label.getText())) label.setText(desired);
+                } else {
+                    String original = lyricsButtonLabels.remove(label);
+                    if (original != null) label.setText(original);
+                }
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "applyLyricsButtonLabel failed: " + t);
+        }
+    }
+
+    private static void refreshLyricsButtonLabel() {
+        WeakReference<Object> ref = playerFragment;
+        Object fragment = ref == null ? null : ref.get();
+        if (fragment == null) return;
+        try {
+            Object target = getFieldUp(fragment, "V");
+            if (target instanceof View) applyLyricsButtonLabel((View) target);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void collectLyricsButtonLabels(View view, List<TextView> out, boolean fallback) {
+        if (view instanceof TextView) {
+            CharSequence text = ((TextView) view).getText();
+            if (text != null && text.length() > 0
+                    && (fallback || isLyricsButtonLabel(text.toString()))) {
+                out.add((TextView) view);
+            }
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                collectLyricsButtonLabels(group.getChildAt(i), out, fallback);
+            }
+        }
+    }
+
+    static boolean isLyricsButtonLabel(String text) {
+        String t = normalize(text, false);
+        return t.contains("lyric") || t.contains("parole")
+                || t.contains("\u0643\u0644\u0645\u0627\u062a");
     }
 
     private static void showAutoTranslationDialog(final Context ctx,
@@ -2136,6 +2214,7 @@ public final class LrclibFallback {
                     if (includeAutoToggle) {
                         setAutoTranslationEnabled(ctx, autoTranslateEnabled);
                     }
+                    refreshLyricsButtonLabel();
                     if (autoTranslateEnabled) {
                         setAutoTranslationEnabled(ctx, true);
                         Object activeFragment = fragmentObj != null
