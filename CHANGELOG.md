@@ -1,3 +1,9 @@
+## [1.10.5](https://github.com/0xgalal/anghami-patches/compare/v1.10.4...v1.10.5) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* resolve backmerge conflicts in favor of main ([e32a4fd](https://github.com/0xgalal/anghami-patches/commit/e32a4fd56888963970aa52e330663b9f9704b701))
+
 ## [1.10.4](https://github.com/0xgalal/anghami-patches/compare/v1.10.3...v1.10.4) (2026-11-19)
 
 ### 🐛 Bug Fixes

@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-19T20:06:37",
-  "description": "## [1.10.4](https://github.com/0xgalal/anghami-patches/compare/v1.10.3...v1.10.4) (2026-11-19)\n\n### 🐛 Bug Fixes\n\n* keep release workspace clean for backmerge ([2c050e9](https://github.com/0xgalal/anghami-patches/commit/2c050e9554529ee93cdd90d5d753f9b666c02c69))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.10.4/patches-1.10.4.mpp",
+  "created_at": "2026-11-19T20:11:48",
+  "description": "## [1.10.5](https://github.com/0xgalal/anghami-patches/compare/v1.10.4...v1.10.5) (2026-11-19)\n\n### 🐛 Bug Fixes\n\n* resolve backmerge conflicts in favor of main ([e32a4fd](https://github.com/0xgalal/anghami-patches/commit/e32a4fd56888963970aa52e330663b9f9704b701))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.10.5/patches-1.10.5.mpp",
   "signature_download_url": "",
-  "version": "1.10.4"
+  "version": "1.10.5"
 }
