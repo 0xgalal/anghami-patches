@@ -58,7 +58,8 @@
           "gradle.properties",
           "patches-bundle.json",
           "patches-list.json",
-          "README.md"
+          "README.md",
+          "gradlew.bat"
         ],
         "message": "chore: Release v${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
@@ -78,6 +79,7 @@
       "@cleyrop-org/semantic-release-backmerge",
       {
         "backmergeBranches": [{"from": "main", "to": "dev"}],
+        "backmergeStrategy": "merge",
         "clearWorkspace": true
       }
     ]
