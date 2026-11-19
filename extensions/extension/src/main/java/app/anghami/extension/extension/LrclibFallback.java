@@ -67,7 +67,9 @@ import java.util.regex.Pattern;
  * - {@link #paintCached} (from the lyrics-view load) paints cached lyrics
  *   instantly without waiting for the DB/API round-trip.
  * - {@link #installLyricsButtonLongPress} opens the auto-translation config
- *   dialog when the player's Lyrics button is long-pressed.
+ *   dialog when the player's Lyrics button is long-pressed; its "Lyrics
+ *   options" button opens {@link #showOptionsForSong} for manual LRCLIB
+ *   search, retry, synced/plain toggle and cache clearing.
  *
  * All app classes are touched via reflection: the extension compiles
  * without the app on the classpath. Any failure is caught and logged;
@@ -124,6 +126,7 @@ public final class LrclibFallback {
     private static String lastPlain;
     private static String lastSynced;
     private static boolean lastPreferSynced = true;
+    private static long lastDialogMs;
     private static volatile WeakReference<Object> playerFragment =
             new WeakReference<Object>(null);
     // Original label of the player's Lyrics button, kept per view so the
@@ -937,6 +940,30 @@ public final class LrclibFallback {
         }
     }
 
+    private static Object callbackForSong(Object songObj) {
+        try {
+            if (songObj == null) return null;
+            SongInfo song = readSong(songObj);
+            if (song == null) return null;
+            String wantedId = songKey(song);
+            synchronized (LrclibFallback.class) {
+                WeakReference<Object> reference = lyricsCallbacks.get(wantedId);
+                Object remembered = reference == null ? null : reference.get();
+                if (remembered != null) return remembered;
+                if (reference != null) lyricsCallbacks.remove(wantedId);
+                if (lastCallback != null && lastSong != null) {
+                    SongInfo last = readSong(lastSong);
+                    if (last != null && wantedId.equals(songKey(last))) return lastCallback;
+                }
+                if (translationCallback != null && wantedId.equals(translationSongId)) {
+                    return translationCallback;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
     private static Field fieldUp(Class<?> c, String name) {
         for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
             try {
@@ -1136,6 +1163,11 @@ public final class LrclibFallback {
             if (ar) return "ترجمة الكلمات بالذكاء الاصطناعي";
             if (fr) return "Traduction des paroles par IA";
             return "AI lyrics translation";
+        }
+        if ("lyrics_options".equals(key)) {
+            if (ar) return "خيارات الكلمات";
+            if (fr) return "Options des paroles";
+            return "Lyrics options";
         }
         if ("ai_note".equals(key)) {
             if (ar) return "ستظهر الترجمة أسفل كل سطر أصلي مع الحفاظ على التوقيت.";
@@ -1658,6 +1690,15 @@ public final class LrclibFallback {
         }
     }
 
+    private static Result apiGetById(long id) {
+        try {
+            String body = httpGet(SOURCE_URL + "/api/get/" + id);
+            return fromGetJson(body, "get id=" + id);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** Auto-pick: first result with usable lyrics wins, no score threshold. */
     private static Result pickFirst(JSONArray arr, String queryUsed) {
         try {
@@ -1671,6 +1712,50 @@ public final class LrclibFallback {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** Ordered unique candidates for the manual picker dialog. */
+    static List<JSONObject> searchCandidates(String track, String artist) {
+        List<JSONObject> out = new ArrayList<JSONObject>();
+        java.util.HashSet<Long> seen = new java.util.HashSet<Long>();
+        String[] bodies = new String[2];
+        try {
+            if (!track.isEmpty()) {
+                bodies[0] = httpGet(SOURCE_URL + "/api/search?track_name=" + enc(track)
+                        + (artist.isEmpty() ? "" : "&artist_name=" + enc(artist)));
+                String q = (track + (artist.isEmpty() ? "" : " " + artist)).trim();
+                bodies[1] = httpGet(SOURCE_URL + "/api/search?q=" + enc(q));
+            }
+        } catch (Exception e) {
+            return out;
+        }
+        for (String body : bodies) {
+            if (body == null) continue;
+            try {
+                JSONArray arr = new JSONArray(body);
+                for (int i = 0; i < arr.length() && out.size() < 12; i++) {
+                    JSONObject o = arr.optJSONObject(i);
+                    if (o == null) continue;
+                    long id = o.optLong("id", -1);
+                    if (id < 0 || !seen.add(id)) continue;
+                    out.add(o);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    static String candidateLabel(JSONObject o) {
+        String t = o.optString("trackName", "?");
+        String a = o.optString("artistName", "?");
+        double d = o.optDouble("duration", -1);
+        String dur = "";
+        if (d > 0) {
+            int s = (int) d;
+            dur = " (" + (s / 60) + ":" + String.format(Locale.ROOT, "%02d", s % 60) + ")";
+        }
+        return t + " — " + a + dur;
     }
 
     // ================= LRC -> LyricsLine =================
@@ -1763,7 +1848,11 @@ public final class LrclibFallback {
                     Object response = buildResponse(songObj, plain, synced);
                     if (response == null) return;
                     List<Object> lines = buildLines(response, plain, synced);
-                    boolean deferForTranslation = false;
+                    // Always show fetched LRCLIB lyrics right away. A slow or
+                    // failing AI provider must never leave the lyrics screen
+                    // hanging on a pending message. Translation still runs in
+                    // the background and replaces these with dual lines when
+                    // it finishes.
                     try {
                         List<Line> sourceLines = new ArrayList<Line>();
                         boolean sourceSynced = false;
@@ -1777,15 +1866,11 @@ public final class LrclibFallback {
                                 sourceLines = parseLrc(synced);
                                 sourceSynced = !sourceLines.isEmpty();
                             }
-                            deferForTranslation = setTranslationSource(
+                            setTranslationSource(
                                     readSong(songObj), songObj, callbackObj,
                                     sourceLines, sourceSynced);
                         }
                     } catch (Exception ignored) {
-                    }
-                    if (deferForTranslation) {
-                        renderTranslationPending(songObj, callbackObj);
-                        return;
                     }
                     invokeRender(callbackObj, songObj, lines, response);
                     Log.d(TAG, "fallback applied (" + queryUsed + ")");
@@ -1900,6 +1985,271 @@ public final class LrclibFallback {
         }
     }
 
+    // ================= options dialog =================
+
+    /** Options dialog for an already-resolved song (play-button entry). */
+    private static void showOptionsForSong(Context ctx, Object song) {
+        synchronized (LrclibFallback.class) {
+            if (System.currentTimeMillis() - lastDialogMs < 2000) return;
+            lastDialogMs = System.currentTimeMillis();
+        }
+        final Object callbackFromFallback;
+        final Object original;
+        final String query;
+        final String source;
+        final String plain;
+        final String synced;
+        synchronized (LrclibFallback.class) {
+            callbackFromFallback = lastCallback;
+            original = lastOriginalResponse;
+            query = lastQueryUsed;
+            source = lastSource;
+            plain = lastPlain;
+            synced = lastSynced;
+        }
+        if (song == null) {
+            Toast.makeText(ctx, tr("no_fallback"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final Object callback = callbackForSong(song);
+        if (callback == null) {
+            Toast.makeText(ctx, tr("no_fallback"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SongInfo info;
+        try {
+            info = readSong(song);
+        } catch (Exception e) {
+            return;
+        }
+        // Freshness: the last-render globals (source/query/plain/synced/
+        // original) may belong to a different (pre-cached/next) song than
+        // the song currently selected in Settings. The artist/title fields
+        // are always filled from the mapped song; the synced/plain toggle
+        // and server-version restore are offered only when globals match.
+        boolean fresh = false;
+        try {
+            Object mappedId = getFieldUp(song, "id");
+            Object lastId = lastSong == null ? null : getFieldUp(lastSong, "id");
+            fresh = mappedId != null && mappedId.equals(lastId)
+                    && callback == callbackFromFallback
+                    && callback == lastCallback;
+        } catch (Exception ignored) {
+        }
+        final SourceSnapshot aiSource = translationSourceFor(song);
+
+        LinearLayout layout = new LinearLayout(ctx);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (16 * ctx.getResources().getDisplayMetrics().density);
+        layout.setPadding(pad, pad / 2, pad, 0);
+        final EditText artistEdit = new EditText(ctx);
+        artistEdit.setHint(tr("hint_artist"));
+        artistEdit.setText(info.artist);
+        final EditText titleEdit = new EditText(ctx);
+        titleEdit.setHint(tr("hint_title"));
+        titleEdit.setText(info.title);
+        layout.addView(artistEdit);
+        layout.addView(titleEdit);
+        final android.widget.Button clearBtn = new android.widget.Button(ctx);
+        clearBtn.setText(tr("clear_cache"));
+        layout.addView(clearBtn);
+        final android.widget.Button searchBtn = new android.widget.Button(ctx);
+        searchBtn.setText(tr("search"));
+        layout.addView(searchBtn);
+        final android.widget.Button translateBtn;
+        if (aiSource != null) {
+            translateBtn = new android.widget.Button(ctx);
+            translateBtn.setText(tr("ai_translate"));
+            layout.addView(translateBtn);
+        } else translateBtn = null;
+
+        AlertDialog.Builder b = new AlertDialog.Builder(ctx);
+        b.setTitle(tr("dialog_title"));
+        b.setView(layout);
+        b.setPositiveButton(tr("retry"), null); // overridden below to avoid auto-dismiss.
+        if (fresh && plain != null && synced != null
+                && !plain.isEmpty() && !synced.isEmpty()) {
+            b.setNeutralButton(lastPreferSynced ? tr("show_plain") : tr("show_synced"), null);
+        }
+        if (fresh) {
+            b.setNegativeButton(tr("server_version"), null);
+        }
+        final AlertDialog dialog = b.create();
+        dialog.show();
+        if (translateBtn != null) {
+            translateBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dialog.dismiss();
+                    showTranslationDialog(v.getContext(), song);
+                }
+            });
+        }
+        searchBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                // Lowercased: LRCLIB matching is case-sensitive enough
+                // that mixed-case artist/title variants miss; normalize()
+                // lowercases too, this keeps the dialog path explicit.
+                final String a = artistEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
+                final String t = titleEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
+                if (a.isEmpty() && t.isEmpty()) return;
+                dialog.dismiss();
+                final Context c = v.getContext();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        final List<JSONObject> found =
+                                searchCandidates(normalize(t, true), normalize(a, true));
+                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (found.isEmpty()) {
+                                    Toast.makeText(c, tr("no_results"),
+                                            Toast.LENGTH_SHORT).show();
+                                    return;
+                                }
+                                final String[] labels = new String[found.size()];
+                                for (int i = 0; i < found.size(); i++) {
+                                    labels[i] = candidateLabel(found.get(i));
+                                }
+                                new AlertDialog.Builder(c)
+                                        .setTitle(tr("pick"))
+                                        .setItems(labels, new android.content.DialogInterface.OnClickListener() {
+                                            @Override
+                                            public void onClick(android.content.DialogInterface d, int which) {
+                                                final long id = found.get(which).optLong("id", -1);
+                                                if (id < 0) return;
+                                                new Thread(new Runnable() {
+                                                    @Override
+                                                    public void run() {
+                                                        Result r = apiGetById(id);
+                                                        if (r == null) {
+                                                            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                                                @Override
+                                                                public void run() {
+                                                                    Toast.makeText(c, tr("empty_record"),
+                                                                            Toast.LENGTH_SHORT).show();
+                                                                }
+                                                            });
+                                                            return;
+                                                        }
+                                                        // The user's pick wins and sticks:
+                                                        // cached, so future opens load it directly.
+                                                        try {
+                                                            writePositiveCache(c, cacheKey(readSong(song)), r);
+                                                        } catch (Exception ignored) {
+                                                        }
+                                                        remember(r.queryUsed, r.source, r.plain, r.synced);
+                                                        renderOnMain(c.getApplicationContext() != null
+                                                                ? c.getApplicationContext() : c,
+                                                                song, callback, r.plain, r.synced,
+                                                                r.queryUsed, true);
+                                                    }
+                                                }).start();
+                                            }
+                                        })
+                                        .show();
+                            }
+                        });
+                    }
+                }).start();
+            }
+        });
+        clearBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    Context c = v.getContext();
+                    prefs(c).edit().clear().apply();
+                    Toast.makeText(c, tr("cache_cleared"), Toast.LENGTH_SHORT).show();
+                    Log.d(TAG, "fallback cache cleared by user");
+                } catch (Throwable t) {
+                    Log.d(TAG, "clear cache failed: " + t);
+                }
+                dialog.dismiss();
+            }
+        });
+        if (dialog.getButton(AlertDialog.BUTTON_POSITIVE) != null) {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    final String a = artistEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
+                    final String t = titleEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
+                    if (a.isEmpty() || t.isEmpty()) return;
+                    dialog.dismiss();
+                    final Context c = v.getContext();
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            SongInfo s = new SongInfo();
+                            try {
+                                s.id = String.valueOf(getFieldUp(song, "id"));
+                            } catch (Exception ignored) {
+                            }
+                            s.artist = a;
+                            s.title = t;
+                            Result r;
+                            try {
+                                r = waterfall(s);
+                            } catch (Throwable th) {
+                                Log.d(TAG, "retry waterfall failed: " + th);
+                                r = null;
+                            }
+                            if (r == null) {
+                                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        Toast.makeText(c, tr("no_match"),
+                                                Toast.LENGTH_SHORT).show();
+                                    }
+                                });
+                                return;
+                            }
+                            remember(r.queryUsed, r.source, r.plain, r.synced);
+                            // Retry wins and sticks: cache under the song id so
+                            // future opens load it instead of the truncated teaser.
+                            try {
+                                SongInfo orig = readSong(song);
+                                writePositiveCache(c.getApplicationContext() != null
+                                        ? c.getApplicationContext() : c,
+                                        cacheKey(orig), r);
+                            } catch (Exception ignored) {
+                            }
+                            renderOnMain(c.getApplicationContext() != null
+                                    ? c.getApplicationContext() : c,
+                                    song, callback, r.plain, r.synced, r.queryUsed, false);
+                        }
+                    }).start();
+                }
+            });
+        }
+        if (dialog.getButton(AlertDialog.BUTTON_NEUTRAL) != null) {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    synchronized (LrclibFallback.class) {
+                        lastPreferSynced = !lastPreferSynced;
+                    }
+                    dialog.dismiss();
+                    renderOnMain(v.getContext(), song, callback, plain, synced, query, false);
+                }
+            });
+        }
+        if (dialog.getButton(AlertDialog.BUTTON_NEGATIVE) != null) {
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dialog.dismiss();
+                    if (original == null) return;
+                    // Re-render the server teaser from the kept original response.
+                    String oPlain = getString(original, "lyricsUnsynced");
+                    renderOnMain(v.getContext(), song, callback, oPlain, null, "server", false);
+                }
+            });
+        }
+    }
+
     // ================= Dual-line AI translation =================
 
     private static final class TranslationSettings {
@@ -2009,6 +2359,10 @@ public final class LrclibFallback {
             }
             return session;
         }
+    }
+
+    private static void showTranslationDialog(final Context ctx, final Object song) {
+        showTranslationDialog(ctx, song, null, false);
     }
 
     private static void showTranslationDialog(final Context ctx, final Object song,
@@ -2185,6 +2539,26 @@ public final class LrclibFallback {
                 .setTitle(tr("ai_title"))
                 .setView(scroll)
                 .setPositiveButton(tr(configOnly ? "save_settings" : "translate_now"), null)
+                .setNeutralButton(tr("lyrics_options"), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        d.dismiss();
+                        Object activeFragment = fragmentObj != null
+                                ? fragmentObj
+                                : playerFragment == null ? null : playerFragment.get();
+                        Object song = currentSongFromPlayer(activeFragment);
+                        if (song == null) {
+                            synchronized (LrclibFallback.class) {
+                                song = lastSong;
+                            }
+                        }
+                        if (song == null) {
+                            Toast.makeText(ctx, tr("no_loaded"), Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        showOptionsForSong(ctx, song);
+                    }
+                })
                 .setNegativeButton(android.R.string.cancel, null)
                 .create();
         dialog.show();
