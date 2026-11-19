@@ -208,49 +208,6 @@ val lyricsFallbackPatch = bytecodePatch(
 }
 
 /**
- * Adds a first-party PageRow to Anghami's main Settings list and routes it
- * to the lyrics options dialog. The play-button long-press is left native.
- */
-@Suppress("unused")
-val lyricsSettingsPatch = bytecodePatch(
-    name = "Lyrics options in Settings",
-    description = "Adds a Lyrics entry to Anghami Settings for LRCLIB search and AI translation options. Pulls in 'LRCLIB lyrics fallback'.",
-    default = false,
-) {
-    compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
-    dependsOn(lyricsFallbackPatch)
-
-    execute {
-        // Add the standard Settings PageRow after the Music category.
-        MainSettingsRowsFingerprint.method.addInstructions(
-            0,
-            """
-                invoke-static {p1}, $FALLBACK_HELPER->addLyricsSettingsRow(Ljava/lang/Object;)V
-            """
-        )
-
-        // Preserve the native click handler for every stock PageRow; the
-        // extension recognizes its sentinel row and opens the options dialog.
-        MainSettingsPageRowClickFingerprint.method.addInstructions(
-            0,
-            """
-                invoke-static {p0}, $FALLBACK_HELPER->handleSettingsPageRowClick(Ljava/lang/Object;)V
-                sget-object v0, LVd/E;->a:LVd/E;
-                return-object v0
-            """
-        )
-
-        // Keep the themed Settings Activity available for AlertDialog.
-        SettingsActivityOnCreateFingerprint.method.addInstructions(
-            0,
-            """
-                invoke-static {p0}, $FALLBACK_HELPER->rememberSettingsActivity(Ljava/lang/Object;)V
-            """
-        )
-    }
-}
-
-/**
  * Adds native-lyrics capture and automatic translation for OpenRouter, OpenCode, and xKiro.
  * Capture at the renderer covers API and StoredLyrics/cache responses.
  * With automatic translation enabled, source lyrics stay hidden until the
@@ -264,7 +221,7 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
-    dependsOn(lyricsSettingsPatch)
+    dependsOn(lyricsFallbackPatch)
 
     execute {
         // Run after substituteCached so the helper sees the actual full lyrics
