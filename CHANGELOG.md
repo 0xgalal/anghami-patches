@@ -1,3 +1,14 @@
+## [1.10.0](https://github.com/0xgalal/anghami-patches/compare/v1.9.1...v1.10.0) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* avoid translating lyrics status messages ([0526ca3](https://github.com/0xgalal/anghami-patches/commit/0526ca32d5ea87e64241d0bc7e9b5ac935869324))
+* reject non-object lyrics translations ([e9193ca](https://github.com/0xgalal/anghami-patches/commit/e9193ca43a932af1448ecc0fd7be08375b1f0417))
+
+### ✨ New Features
+
+* enforce strict lyrics translation output ([c816531](https://github.com/0xgalal/anghami-patches/commit/c8165316871c7dc8f3c6fd7bbc24108dc65232fb))
+
 ## [1.9.1](https://github.com/0xgalal/anghami-patches/compare/v1.9.0...v1.9.1) (2026-11-19)
 
 ### 🐛 Bug Fixes
