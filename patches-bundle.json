@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-19T02:25:56",
-  "description": "## [1.5.0](https://github.com/0xgalal/anghami-patches/compare/v1.4.0...v1.5.0) (2026-11-19)\n\n### ✨ New Features\n\n* add automatic lyrics translation ([#5](https://github.com/0xgalal/anghami-patches/issues/5)) ([206f2ee](https://github.com/0xgalal/anghami-patches/commit/206f2ee6b79dd43fcbb3e20f8a524c03c0396019))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.5.0/patches-1.5.0.mpp",
+  "created_at": "2026-11-19T02:58:23",
+  "description": "## [1.6.0](https://github.com/0xgalal/anghami-patches/compare/v1.5.0...v1.6.0) (2026-11-19)\n\n### ✨ New Features\n\n* add OpenRouter model selection ([#6](https://github.com/0xgalal/anghami-patches/issues/6)) ([2815a7b](https://github.com/0xgalal/anghami-patches/commit/2815a7b26b15d7afe889114d73e2f7244ba5b7df))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.6.0/patches-1.6.0.mpp",
   "signature_download_url": "",
-  "version": "1.5.0"
+  "version": "1.6.0"
 }

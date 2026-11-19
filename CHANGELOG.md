@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/0xgalal/anghami-patches/compare/v1.5.0...v1.6.0) (2026-11-19)
+
+### ✨ New Features
+
+* add OpenRouter model selection ([#6](https://github.com/0xgalal/anghami-patches/issues/6)) ([2815a7b](https://github.com/0xgalal/anghami-patches/commit/2815a7b26b15d7afe889114d73e2f7244ba5b7df))
+
 ## [1.5.0](https://github.com/0xgalal/anghami-patches/compare/v1.4.0...v1.5.0) (2026-11-19)
 
 ### ✨ New Features
