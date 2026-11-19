@@ -1,3 +1,9 @@
+## [1.10.4](https://github.com/0xgalal/anghami-patches/compare/v1.10.3...v1.10.4) (2026-11-19)
+
+### 🐛 Bug Fixes
+
+* keep release workspace clean for backmerge ([2c050e9](https://github.com/0xgalal/anghami-patches/commit/2c050e9554529ee93cdd90d5d753f9b666c02c69))
+
 ## [1.10.3](https://github.com/0xgalal/anghami-patches/compare/v1.10.2...v1.10.3) (2026-11-19)
 
 ### 🐛 Bug Fixes
