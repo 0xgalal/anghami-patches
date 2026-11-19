@@ -1,0 +1,38 @@
+package app.anghami.extension.extension;
+
+import org.junit.Test;
+
+import java.util.List;
+
+import static org.junit.Assert.*;
+
+public class LrclibWaterfallTest {
+    @Test
+    public void identicalVariantsCollapseToOneQuery() {
+        List<String[]> pairs = LrclibFallback.waterfallPairs("Bohemian Rhapsody", "Queen");
+        assertEquals(1, pairs.size());
+        assertArrayEquals(new String[]{"bohemian rhapsody", "queen"}, pairs.get(0));
+    }
+
+    @Test
+    public void parenStrippedVariantsAddASecondQuery() {
+        List<String[]> pairs = LrclibFallback.waterfallPairs("Song (Remix)", "Artist");
+        assertEquals(2, pairs.size());
+        assertArrayEquals(new String[]{"song", "artist"}, pairs.get(0));
+        assertArrayEquals(new String[]{"song remix", "artist"}, pairs.get(1));
+    }
+
+    @Test
+    public void artistVariantsAddASecondQuery() {
+        List<String[]> pairs = LrclibFallback.waterfallPairs("Song", "Artist [Live]");
+        assertEquals(2, pairs.size());
+        assertArrayEquals(new String[]{"song", "artist"}, pairs.get(0));
+        assertArrayEquals(new String[]{"song", "artist live"}, pairs.get(1));
+    }
+
+    @Test
+    public void missingMetadataProducesNoExactQueries() {
+        assertTrue(LrclibFallback.waterfallPairs("Song", "").isEmpty());
+        assertTrue(LrclibFallback.waterfallPairs("", "Artist").isEmpty());
+    }
+}

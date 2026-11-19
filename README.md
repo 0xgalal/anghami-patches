@@ -43,7 +43,6 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 | [Hide upgrade upsell](#hide-upgrade-upsell) | Hides the nav upgrade entry, header promo banner, feed upsell cards and AI MIX button model (gap-free), and settings subscribe banner. Server-driven UI the Plus spoof cannot remove. |  |
 | [Hide upsell feature buttons](#hide-upsell-feature-buttons) | Hides TRY SING ALONG karaoke upsell, disables the karaoke feature itself, and hides the player/playlist AI MIX buttons. Feature UI stays hidden rather than paywalled. |  |
 | [LRCLIB lyrics fallback](#lrclib-lyrics-fallback) | When the server returns truncated/empty lyrics, fetches the full text from LRCLIB (opt-in free source) into a separate cache. Native full lyrics and the Plus path are untouched. |  |
-| [Lyrics options in Settings](#lyrics-options-in-settings) | Adds a Lyrics entry to Anghami Settings for LRCLIB search and AI translation options. Pulls in 'LRCLIB lyrics fallback'. |  |
 | [Monet dynamic colors](#monet-dynamic-colors) | Replaces the static neon brand accents with wallpaper-based Monet dynamic colors (M3 Expressive primary/secondary/tertiary roles) on Android 12+. Older versions keep stock colors. |  |
 | [Player theme](#player-theme) | Night-only player theme: removes the cover-art tint and paints the now-playing row, pills and action icons with the primary accent at night; day mode keeps the stock tinted player. Pulls in 'Player theme background' resources. |  |
 | [Player theme background](#player-theme-background) | Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'. |  |
@@ -69,8 +68,8 @@ before using these patches on any other app version.
 
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 
-Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It includes
-**Lyrics options in Settings** and the LRCLIB fallback patch it depends on.
+Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It pulls in
+the LRCLIB fallback patch it depends on.
 In the player, long-press the **Lyrics** button and enable automatic
 translation. Tap **Provider** to select **OpenRouter**, **OpenCode**, or **xKiro**, then enter
 that provider's API key, model ID, and target language. Keys and selected models
@@ -95,7 +94,6 @@ turns on Lyrics mode and translates lyrics as they load, with no per-song
 Translate action. The original is held while translation runs, then the
 original and translation appear together. Predominantly Arabic-script lyrics
 are skipped.
-**Settings > Lyrics** remains available for manual lyrics actions.
 
 The original lyrics remain intact. Each translation is displayed beneath its
 source line, using the source line’s timestamp for synchronized lyrics.

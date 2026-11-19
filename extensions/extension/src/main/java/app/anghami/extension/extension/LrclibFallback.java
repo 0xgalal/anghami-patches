@@ -66,8 +66,8 @@ import java.util.regex.Pattern;
  *   so native saveLyrics keeps refusing them.
  * - {@link #paintCached} (from the lyrics-view load) paints cached lyrics
  *   instantly without waiting for the DB/API round-trip.
- * - {@link #showSettingsLyricsOptions} opens the options dialog for the
- *   current song from Anghami Settings.
+ * - {@link #installLyricsButtonLongPress} opens the auto-translation config
+ *   dialog when the player's Lyrics button is long-pressed.
  *
  * All app classes are touched via reflection: the extension compiles
  * without the app on the classpath. Any failure is caught and logged;
@@ -90,6 +90,10 @@ public final class LrclibFallback {
     private static final long NEG_TTL_MS = 7L * 24 * 3600 * 1000;
     private static final int MAX_ENTRIES = 500;
     private static final int HTTP_TIMEOUT_MS = 12000;
+    // LRCLIB is checked on a background thread while the user waits for
+    // lyrics. Keep each attempt short so a slow/unreachable endpoint fails
+    // fast instead of stalling the whole waterfall for 12s per request.
+    private static final int LRCLIB_TIMEOUT_MS = 6000;
     private static final int TRANSLATION_TIMEOUT_MS = 90000;
     private static final int MAX_TRANSLATION_LINES = 800;
     private static final int MAX_TRANSLATION_CHARS = 40000;
@@ -120,9 +124,6 @@ public final class LrclibFallback {
     private static String lastPlain;
     private static String lastSynced;
     private static boolean lastPreferSynced = true;
-    private static long lastDialogMs;
-    private static volatile WeakReference<Activity> settingsActivity =
-            new WeakReference<Activity>(null);
     private static volatile WeakReference<Object> playerFragment =
             new WeakReference<Object>(null);
     private static final java.util.WeakHashMap<Object, String> renderedKeys =
@@ -248,13 +249,6 @@ public final class LrclibFallback {
         }
     }
 
-    /** Stores the themed Activity used by the Settings Compose screen. */
-    public static void rememberSettingsActivity(Object activityObj) {
-        if (activityObj instanceof Activity) {
-            settingsActivity = new WeakReference<Activity>((Activity) activityObj);
-        }
-    }
-
     /** Installs the separate long-press action on the player's Lyrics toggle. */
     public static void installLyricsButtonLongPress(Object fragmentObj) {
         try {
@@ -324,87 +318,6 @@ public final class LrclibFallback {
             }
         } catch (Throwable t) {
             Log.d(TAG, "ensureLyricsMode failed: " + t);
-        }
-    }
-
-    /**
-     * Adds the synthetic Lyrics row to the Settings page model. LIVE_RADIO is
-     * an unused native row ID reserved as the click sentinel; the click hook
-     * intercepts it before Anghami's Settings router sees it.
-     */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    public static void addLyricsSettingsRow(Object rowsObj) {
-        try {
-            if (!(rowsObj instanceof List)) return;
-            List rows = (List) rowsObj;
-            int insertAt = rows.size();
-            for (int i = 0; i < rows.size(); i++) {
-                Object row = rows.get(i);
-                Object rowId = settingsRowIdOf(row);
-                if (rowId != null && "LIVE_RADIO".equals(enumName(rowId))) return;
-                if (rowId != null && "MUSIC".equals(enumName(rowId))) {
-                    insertAt = i + 1;
-                } else if (insertAt == rows.size()
-                        && row != null && row.getClass().getName().endsWith("$Version")) {
-                    insertAt = i;
-                }
-            }
-
-            Class<?> rowIdClass =
-                    Class.forName("com.anghami.model.pojo.settings.SettingsRowId");
-            Object sentinel = rowIdClass.getField("LIVE_RADIO").get(null);
-            Class<?> subtitleClass =
-                    Class.forName("com.anghami.model.pojo.settings.SubtitleText");
-            Class<?> pageRowClass = Class.forName(
-                    "com.anghami.model.pojo.settings.SettingsRow$ItemRow$PageRow");
-            Object row = pageRowClass.getConstructor(
-                            Integer.TYPE, rowIdClass, subtitleClass, Boolean.TYPE, Integer.TYPE)
-                    .newInstance(0x7f130382, sentinel, null, true, 0x7f080810);
-            rows.add(Math.max(0, Math.min(insertAt, rows.size())), row);
-        } catch (Throwable t) {
-            Log.d(TAG, "addLyricsSettingsRow failed: " + t);
-        }
-    }
-
-    /**
-     * Replacement for the stock PageRow click lambda. It intercepts our
-     * sentinel and faithfully delegates all regular row IDs to the original
-     * callback, without adding branchy smali to the Compose click path.
-     */
-    public static void handleSettingsPageRowClick(Object clickLambda) {
-        try {
-            if (clickLambda == null) return;
-            Object row = getFieldUp(clickLambda, "b");
-            Object rowId = settingsRowIdOf(row);
-            if (rowId != null && "LIVE_RADIO".equals(enumName(rowId))) {
-                showSettingsLyricsOptions();
-                return;
-            }
-            Object callback = getFieldUp(clickLambda, "a");
-            if (callback == null) return;
-            Method invoke = callback.getClass().getMethod("invoke", Object.class);
-            invoke.setAccessible(true);
-            invoke.invoke(callback, rowId);
-        } catch (Throwable t) {
-            Log.d(TAG, "handleSettingsPageRowClick failed: " + t);
-        }
-    }
-
-    private static Object settingsRowIdOf(Object row) {
-        try {
-            if (row == null) return null;
-            Method getter = row.getClass().getMethod("getSettingsRowId");
-            return getter.invoke(row);
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
-    private static String enumName(Object value) {
-        try {
-            return value instanceof Enum ? ((Enum<?>) value).name() : String.valueOf(value);
-        } catch (Throwable ignored) {
-            return "";
         }
     }
 
@@ -598,28 +511,6 @@ public final class LrclibFallback {
             }).start();
         } catch (Throwable t) {
             Log.d(TAG, "maybeFetch failed: " + t);
-        }
-    }
-
-    /** Opens lyrics options for the currently playing song from Settings. */
-    public static void showSettingsLyricsOptions() {
-        try {
-            WeakReference<Activity> ref = settingsActivity;
-            Activity ctx = ref == null ? null : ref.get();
-            if (ctx == null) return;
-            Object song = currentPlayingSong();
-            if (song == null) {
-                synchronized (LrclibFallback.class) {
-                    song = lastSong;
-                }
-            }
-            if (song == null) {
-                Toast.makeText(ctx, tr("no_loaded"), Toast.LENGTH_SHORT).show();
-                return;
-            }
-            showOptionsForSong(ctx, song);
-        } catch (Throwable t) {
-            Log.d(TAG, "showSettingsLyricsOptions failed: " + t);
         }
     }
 
@@ -966,30 +857,6 @@ public final class LrclibFallback {
             Log.d(TAG, "translationSourceFor failed: " + t);
             return null;
         }
-    }
-
-    private static Object callbackForSong(Object songObj) {
-        try {
-            if (songObj == null) return null;
-            SongInfo song = readSong(songObj);
-            if (song == null) return null;
-            String wantedId = songKey(song);
-            synchronized (LrclibFallback.class) {
-                WeakReference<Object> reference = lyricsCallbacks.get(wantedId);
-                Object remembered = reference == null ? null : reference.get();
-                if (remembered != null) return remembered;
-                if (reference != null) lyricsCallbacks.remove(wantedId);
-                if (lastCallback != null && lastSong != null) {
-                    SongInfo last = readSong(lastSong);
-                    if (last != null && wantedId.equals(songKey(last))) return lastCallback;
-                }
-                if (translationCallback != null && wantedId.equals(translationSongId)) {
-                    return translationCallback;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return null;
     }
 
     private static Field fieldUp(Class<?> c, String name) {
@@ -1546,33 +1413,51 @@ public final class LrclibFallback {
     }
 
     private static Result waterfall(SongInfo song) {
-        String[] variants = new String[]{
-                normalize(song.title, true), normalize(song.title, false)};
-        String artist = normalize(song.artist, true);
-        String artistFull = normalize(song.artist, false);
         String dur = song.hasDuration ? String.valueOf(Math.round(song.duration)) : null;
+        List<String[]> pairs = waterfallPairs(song.title, song.artist);
 
-        // 1-2. Exact /api/get, title + artist (+ duration), both variants.
-        for (String tv : variants) {
-            for (String av : new String[]{artist, artistFull}) {
-                if (tv.isEmpty()) continue;
-                Result r = apiGet(tv, av, dur);
+        // Pass 1: exact /api/get with duration (most accurate). Each pair is
+        // unique, so identical normalized variants never repeat a request.
+        for (String[] pair : pairs) {
+            Result r = apiGet(pair[0], pair[1], dur);
+            if (r != null) return r;
+        }
+        // Pass 2: same exact queries without duration. LRCLIB's duration
+        // filter can reject an otherwise correct match when the app's
+        // metadata differs; this is only needed when we sent a duration.
+        if (dur != null) {
+            for (String[] pair : pairs) {
+                Result r = apiGet(pair[0], pair[1], null);
                 if (r != null) return r;
-                if (r == null && dur != null) {
-                    r = apiGet(tv, av, null);
-                    if (r != null) return r;
-                }
             }
         }
-        // 3. Fielded search + scoring.
-        Result r = apiSearchFielded(
-                normalize(song.title, true), normalize(song.artist, true),
-                song.hasDuration ? song.duration : -1);
+        // Pass 3: fielded search, then q-style search (only if still empty).
+        String title = normalize(song.title, true);
+        String artist = normalize(song.artist, true);
+        float duration = song.hasDuration ? song.duration : -1;
+        Result r = apiSearchFielded(title, artist, duration);
         if (r != null) return r;
-        // 4. q-style, title then artist.
-        return apiSearchQ(
-                normalize(song.title, true), normalize(song.artist, true),
-                song.hasDuration ? song.duration : -1);
+        return apiSearchQ(title, artist, duration);
+    }
+
+    /**
+     * Ordered, deduplicated (track, artist) queries for the exact-match
+     * passes. The plain and paren-stripped variants coincide for most songs,
+     * so collapsing them halves the request count in the common case.
+     */
+    static List<String[]> waterfallPairs(String title, String artist) {
+        List<String[]> pairs = new ArrayList<String[]>();
+        addWaterfallPair(pairs, normalize(title, true), normalize(artist, true));
+        addWaterfallPair(pairs, normalize(title, false), normalize(artist, false));
+        return pairs;
+    }
+
+    private static void addWaterfallPair(List<String[]> pairs, String track, String artist) {
+        if (track.isEmpty() || artist.isEmpty()) return;
+        for (String[] existing : pairs) {
+            if (existing[0].equals(track) && existing[1].equals(artist)) return;
+        }
+        pairs.add(new String[]{track, artist});
     }
 
     private static String enc(String s) {
@@ -1588,8 +1473,8 @@ public final class LrclibFallback {
         c.setRequestMethod("GET");
         c.setRequestProperty("User-Agent", UA);
         c.setRequestProperty("Accept", "application/json");
-        c.setConnectTimeout(HTTP_TIMEOUT_MS);
-        c.setReadTimeout(HTTP_TIMEOUT_MS);
+        c.setConnectTimeout(LRCLIB_TIMEOUT_MS);
+        c.setReadTimeout(LRCLIB_TIMEOUT_MS);
         int code = c.getResponseCode();
         if (code == 404) return null; // clean miss (TrackNotFound).
         if (code == 503) throw new RateLimited();
@@ -1695,15 +1580,6 @@ public final class LrclibFallback {
         }
     }
 
-    private static Result apiGetById(long id) {
-        try {
-            String body = httpGet(SOURCE_URL + "/api/get/" + id);
-            return fromGetJson(body, "get id=" + id);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     /** Auto-pick: first result with usable lyrics wins, no score threshold. */
     private static Result pickFirst(JSONArray arr, String queryUsed) {
         try {
@@ -1717,50 +1593,6 @@ public final class LrclibFallback {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    /** Ordered unique candidates for the manual picker dialog. */
-    static List<JSONObject> searchCandidates(String track, String artist) {
-        List<JSONObject> out = new ArrayList<JSONObject>();
-        java.util.HashSet<Long> seen = new java.util.HashSet<Long>();
-        String[] bodies = new String[2];
-        try {
-            if (!track.isEmpty()) {
-                bodies[0] = httpGet(SOURCE_URL + "/api/search?track_name=" + enc(track)
-                        + (artist.isEmpty() ? "" : "&artist_name=" + enc(artist)));
-                String q = (track + (artist.isEmpty() ? "" : " " + artist)).trim();
-                bodies[1] = httpGet(SOURCE_URL + "/api/search?q=" + enc(q));
-            }
-        } catch (Exception e) {
-            return out;
-        }
-        for (String body : bodies) {
-            if (body == null) continue;
-            try {
-                JSONArray arr = new JSONArray(body);
-                for (int i = 0; i < arr.length() && out.size() < 12; i++) {
-                    JSONObject o = arr.optJSONObject(i);
-                    if (o == null) continue;
-                    long id = o.optLong("id", -1);
-                    if (id < 0 || !seen.add(id)) continue;
-                    out.add(o);
-                }
-            } catch (Exception ignored) {
-            }
-        }
-        return out;
-    }
-
-    static String candidateLabel(JSONObject o) {
-        String t = o.optString("trackName", "?");
-        String a = o.optString("artistName", "?");
-        double d = o.optDouble("duration", -1);
-        String dur = "";
-        if (d > 0) {
-            int s = (int) d;
-            dur = " (" + (s / 60) + ":" + String.format(Locale.ROOT, "%02d", s % 60) + ")";
-        }
-        return t + " — " + a + dur;
     }
 
     // ================= LRC -> LyricsLine =================
@@ -1990,271 +1822,6 @@ public final class LrclibFallback {
         }
     }
 
-    // ================= options dialog =================
-
-    /** Options dialog for an already-resolved song (play-button entry). */
-    private static void showOptionsForSong(Context ctx, Object song) {
-        synchronized (LrclibFallback.class) {
-            if (System.currentTimeMillis() - lastDialogMs < 2000) return;
-            lastDialogMs = System.currentTimeMillis();
-        }
-        final Object callbackFromFallback;
-        final Object original;
-        final String query;
-        final String source;
-        final String plain;
-        final String synced;
-        synchronized (LrclibFallback.class) {
-            callbackFromFallback = lastCallback;
-            original = lastOriginalResponse;
-            query = lastQueryUsed;
-            source = lastSource;
-            plain = lastPlain;
-            synced = lastSynced;
-        }
-        if (song == null) {
-            Toast.makeText(ctx, tr("no_fallback"), Toast.LENGTH_SHORT).show();
-            return;
-        }
-        final Object callback = callbackForSong(song);
-        if (callback == null) {
-            Toast.makeText(ctx, tr("no_fallback"), Toast.LENGTH_SHORT).show();
-            return;
-        }
-        SongInfo info;
-        try {
-            info = readSong(song);
-        } catch (Exception e) {
-            return;
-        }
-        // Freshness: the last-render globals (source/query/plain/synced/
-        // original) may belong to a different (pre-cached/next) song than
-        // the song currently selected in Settings. The artist/title fields
-        // are always filled from the mapped song; the synced/plain toggle
-        // and server-version restore are offered only when globals match.
-        boolean fresh = false;
-        try {
-            Object mappedId = getFieldUp(song, "id");
-            Object lastId = lastSong == null ? null : getFieldUp(lastSong, "id");
-            fresh = mappedId != null && mappedId.equals(lastId)
-                    && callback == callbackFromFallback
-                    && callback == lastCallback;
-        } catch (Exception ignored) {
-        }
-        final SourceSnapshot aiSource = translationSourceFor(song);
-
-        LinearLayout layout = new LinearLayout(ctx);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (16 * ctx.getResources().getDisplayMetrics().density);
-        layout.setPadding(pad, pad / 2, pad, 0);
-        final EditText artistEdit = new EditText(ctx);
-        artistEdit.setHint(tr("hint_artist"));
-        artistEdit.setText(info.artist);
-        final EditText titleEdit = new EditText(ctx);
-        titleEdit.setHint(tr("hint_title"));
-        titleEdit.setText(info.title);
-        layout.addView(artistEdit);
-        layout.addView(titleEdit);
-        final android.widget.Button clearBtn = new android.widget.Button(ctx);
-        clearBtn.setText(tr("clear_cache"));
-        layout.addView(clearBtn);
-        final android.widget.Button searchBtn = new android.widget.Button(ctx);
-        searchBtn.setText(tr("search"));
-        layout.addView(searchBtn);
-        final android.widget.Button translateBtn;
-        if (aiSource != null) {
-            translateBtn = new android.widget.Button(ctx);
-            translateBtn.setText(tr("ai_translate"));
-            layout.addView(translateBtn);
-        } else translateBtn = null;
-
-        AlertDialog.Builder b = new AlertDialog.Builder(ctx);
-        b.setTitle(tr("dialog_title"));
-        b.setView(layout);
-        b.setPositiveButton(tr("retry"), null); // overridden below to avoid auto-dismiss.
-        if (fresh && plain != null && synced != null
-                && !plain.isEmpty() && !synced.isEmpty()) {
-            b.setNeutralButton(lastPreferSynced ? tr("show_plain") : tr("show_synced"), null);
-        }
-        if (fresh) {
-            b.setNegativeButton(tr("server_version"), null);
-        }
-        final AlertDialog dialog = b.create();
-        dialog.show();
-        if (translateBtn != null) {
-            translateBtn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dialog.dismiss();
-                    showTranslationDialog(v.getContext(), song);
-                }
-            });
-        }
-        searchBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                // Lowercased: LRCLIB matching is case-sensitive enough
-                // that mixed-case artist/title variants miss; normalize()
-                // lowercases too, this keeps the dialog path explicit.
-                final String a = artistEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
-                final String t = titleEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
-                if (a.isEmpty() && t.isEmpty()) return;
-                dialog.dismiss();
-                final Context c = v.getContext();
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        final List<JSONObject> found =
-                                searchCandidates(normalize(t, true), normalize(a, true));
-                        new Handler(Looper.getMainLooper()).post(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (found.isEmpty()) {
-                                    Toast.makeText(c, tr("no_results"),
-                                            Toast.LENGTH_SHORT).show();
-                                    return;
-                                }
-                                final String[] labels = new String[found.size()];
-                                for (int i = 0; i < found.size(); i++) {
-                                    labels[i] = candidateLabel(found.get(i));
-                                }
-                                new AlertDialog.Builder(c)
-                                        .setTitle(tr("pick"))
-                                        .setItems(labels, new android.content.DialogInterface.OnClickListener() {
-                                            @Override
-                                            public void onClick(android.content.DialogInterface d, int which) {
-                                                final long id = found.get(which).optLong("id", -1);
-                                                if (id < 0) return;
-                                                new Thread(new Runnable() {
-                                                    @Override
-                                                    public void run() {
-                                                        Result r = apiGetById(id);
-                                                        if (r == null) {
-                                                            new Handler(Looper.getMainLooper()).post(new Runnable() {
-                                                                @Override
-                                                                public void run() {
-                                                                    Toast.makeText(c, tr("empty_record"),
-                                                                            Toast.LENGTH_SHORT).show();
-                                                                }
-                                                            });
-                                                            return;
-                                                        }
-                                                        // The user's pick wins and sticks:
-                                                        // cached, so future opens load it directly.
-                                                        try {
-                                                            writePositiveCache(c, cacheKey(readSong(song)), r);
-                                                        } catch (Exception ignored) {
-                                                        }
-                                                        remember(r.queryUsed, r.source, r.plain, r.synced);
-                                                        renderOnMain(c.getApplicationContext() != null
-                                                                ? c.getApplicationContext() : c,
-                                                                song, callback, r.plain, r.synced,
-                                                                r.queryUsed, true);
-                                                    }
-                                                }).start();
-                                            }
-                                        })
-                                        .show();
-                            }
-                        });
-                    }
-                }).start();
-            }
-        });
-        clearBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                try {
-                    Context c = v.getContext();
-                    prefs(c).edit().clear().apply();
-                    Toast.makeText(c, tr("cache_cleared"), Toast.LENGTH_SHORT).show();
-                    Log.d(TAG, "fallback cache cleared by user");
-                } catch (Throwable t) {
-                    Log.d(TAG, "clear cache failed: " + t);
-                }
-                dialog.dismiss();
-            }
-        });
-        if (dialog.getButton(AlertDialog.BUTTON_POSITIVE) != null) {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    final String a = artistEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
-                    final String t = titleEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
-                    if (a.isEmpty() || t.isEmpty()) return;
-                    dialog.dismiss();
-                    final Context c = v.getContext();
-                    new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            SongInfo s = new SongInfo();
-                            try {
-                                s.id = String.valueOf(getFieldUp(song, "id"));
-                            } catch (Exception ignored) {
-                            }
-                            s.artist = a;
-                            s.title = t;
-                            Result r;
-                            try {
-                                r = waterfall(s);
-                            } catch (Throwable th) {
-                                Log.d(TAG, "retry waterfall failed: " + th);
-                                r = null;
-                            }
-                            if (r == null) {
-                                new Handler(Looper.getMainLooper()).post(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        Toast.makeText(c, tr("no_match"),
-                                                Toast.LENGTH_SHORT).show();
-                                    }
-                                });
-                                return;
-                            }
-                            remember(r.queryUsed, r.source, r.plain, r.synced);
-                            // Retry wins and sticks: cache under the song id so
-                            // future opens load it instead of the truncated teaser.
-                            try {
-                                SongInfo orig = readSong(song);
-                                writePositiveCache(c.getApplicationContext() != null
-                                        ? c.getApplicationContext() : c,
-                                        cacheKey(orig), r);
-                            } catch (Exception ignored) {
-                            }
-                            renderOnMain(c.getApplicationContext() != null
-                                    ? c.getApplicationContext() : c,
-                                    song, callback, r.plain, r.synced, r.queryUsed, false);
-                        }
-                    }).start();
-                }
-            });
-        }
-        if (dialog.getButton(AlertDialog.BUTTON_NEUTRAL) != null) {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    synchronized (LrclibFallback.class) {
-                        lastPreferSynced = !lastPreferSynced;
-                    }
-                    dialog.dismiss();
-                    renderOnMain(v.getContext(), song, callback, plain, synced, query, false);
-                }
-            });
-        }
-        if (dialog.getButton(AlertDialog.BUTTON_NEGATIVE) != null) {
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dialog.dismiss();
-                    if (original == null) return;
-                    // Re-render the server teaser from the kept original response.
-                    String oPlain = getString(original, "lyricsUnsynced");
-                    renderOnMain(v.getContext(), song, callback, oPlain, null, "server", false);
-                }
-            });
-        }
-    }
-
     // ================= Dual-line AI translation =================
 
     private static final class TranslationSettings {
@@ -2364,10 +1931,6 @@ public final class LrclibFallback {
             }
             return session;
         }
-    }
-
-    private static void showTranslationDialog(final Context ctx, final Object song) {
-        showTranslationDialog(ctx, song, null, false);
     }
 
     private static void showTranslationDialog(final Context ctx, final Object song,

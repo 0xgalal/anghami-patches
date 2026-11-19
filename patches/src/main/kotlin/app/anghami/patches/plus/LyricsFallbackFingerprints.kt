@@ -134,55 +134,6 @@ object LyricsModeRevertFingerprint : Fingerprint(
 )
 
 /**
- * Main Settings' loaded row state. The constructor receives the mutable
- * ArrayList produced by SettingsLayoutProvider; the helper inserts a
- * standard PageRow immediately after Music.
- */
-object MainSettingsRowsFingerprint : Fingerprint(
-    definingClass = "Lcom/anghami/app/settings/view/ui/mainsettings/MainSettingsViewModel\$a\$b;",
-    name = "<init>",
-    returnType = "V",
-    parameters = listOf("Ljava/util/List;"),
-    filters = listOf(
-        string("settingsRow"),
-    )
-)
-
-/**
- * PageRow click lambda used by the main Settings list. The extension helper
- * handles its injected sentinel row and delegates every stock row click.
- */
-object MainSettingsPageRowClickFingerprint : Fingerprint(
-    definingClass = "Lcom/anghami/app/settings/view/ui/compose/m;",
-    name = "invoke",
-    returnType = "Ljava/lang/Object;",
-    parameters = listOf(),
-    filters = listOf(
-        methodCall(
-            definingClass = "Lcom/anghami/model/pojo/settings/SettingsRow\$ItemRow\$PageRow;",
-            name = "getSettingsRowId",
-        )
-    )
-)
-
-/**
- * SettingsActivity owns the Settings Compose host and provides the themed
- * Activity context required by the lyrics options dialog.
- */
-object SettingsActivityOnCreateFingerprint : Fingerprint(
-    definingClass = "Lcom/anghami/app/settings/view/SettingsActivity;",
-    name = "onCreate",
-    returnType = "V",
-    parameters = listOf("Landroid/os/Bundle;"),
-    filters = listOf(
-        methodCall(
-            definingClass = "LB5/d0;",
-            name = "setContentView",
-        )
-    )
-)
-
-/**
  * PlayerFragment.onResume has its Lyrics toggle view initialized and attaches
  * the native click listener. The extension adds a separate long-click listener
  * to that toggle; its ordinary click behavior remains untouched.
