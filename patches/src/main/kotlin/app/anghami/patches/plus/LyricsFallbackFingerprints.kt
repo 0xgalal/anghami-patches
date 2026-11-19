@@ -15,7 +15,7 @@ import app.morphe.patcher.string
  *   when truncated) and `LA5/A;->d(response)` (saveLyrics, refuses truncated).
  * - `LA7/E;->b` logs "LyricsHelper:  onLyricsLoadSuccess() called for songId: ".
  * - `com.anghami.ui.view.A` extends FrameLayout and implements the `A7/E$a`
- *   render callback, so the callback object doubles as the long-press anchor.
+ *   render callback, so Settings can open song-specific lyrics actions.
  *
  * No accessFlags anywhere (exact-int match lesson, REPORT 10.5): class +
  * name + signature + content filters already pin each method.
@@ -134,25 +134,50 @@ object LyricsModeRevertFingerprint : Fingerprint(
 )
 
 /**
- * `PlayerFragment.l$c.onLongClick(View)`: the play/pause button's native
- * long-press — shows the sleep-timer bottom sheet (`L6/b.h0`, the
- * TimerBottomSheetDialogFragment). The lyrics-options patch early-returns
- * here with our dialog instead. No accessFlags (class + name + signature +
- * content pin it).
+ * Main Settings' loaded row state. The constructor receives the mutable
+ * ArrayList produced by SettingsLayoutProvider; the helper inserts a
+ * standard PageRow immediately after Music.
  */
-object PlayPauseLongPressFingerprint : Fingerprint(
-    definingClass = "Lcom/anghami/player/ui/l\$c;",
-    name = "onLongClick",
-    returnType = "Z",
-    parameters = listOf("Landroid/view/View;"),
+object MainSettingsRowsFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/app/settings/view/ui/mainsettings/MainSettingsViewModel\$a\$b;",
+    name = "<init>",
+    returnType = "V",
+    parameters = listOf("Ljava/util/List;"),
+    filters = listOf(
+        string("settingsRow"),
+    )
+)
+
+/**
+ * PageRow click lambda used by the main Settings list. The extension helper
+ * handles its injected sentinel row and delegates every stock row click.
+ */
+object MainSettingsPageRowClickFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/app/settings/view/ui/compose/m;",
+    name = "invoke",
+    returnType = "Ljava/lang/Object;",
+    parameters = listOf(),
     filters = listOf(
         methodCall(
-            definingClass = "Lcom/anghami/player/ui/l;",
-            name = "N0",
-        ),
+            definingClass = "Lcom/anghami/model/pojo/settings/SettingsRow\$ItemRow\$PageRow;",
+            name = "getSettingsRowId",
+        )
+    )
+)
+
+/**
+ * SettingsActivity owns the Settings Compose host and provides the themed
+ * Activity context required by the lyrics options dialog.
+ */
+object SettingsActivityOnCreateFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/app/settings/view/SettingsActivity;",
+    name = "onCreate",
+    returnType = "V",
+    parameters = listOf("Landroid/os/Bundle;"),
+    filters = listOf(
         methodCall(
-            definingClass = "LL6/b;",
-            name = "h0",
-        ),
+            definingClass = "LB5/d0;",
+            name = "setContentView",
+        )
     )
 )

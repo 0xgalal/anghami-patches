@@ -93,9 +93,9 @@ val lyricsFallbackPatch = bytecodePatch(
         // entry): a cached LRCLIB result rewrites the truncated/empty
         // response in place before native renders it, so the teaser is
         // never shown on first open or revisit. Also retain the render
-        // callback for the long-press options even when native full lyrics
-        // make the LRCLIB helper return early. Branch-free prepend (v0-v2
-        // dead at entry of this static method); decisions live in helpers.
+        // callback for the Settings options entry even when native full
+        // lyrics make the LRCLIB helper return early. Branch-free prepend;
+        // v0-v2 are dead at entry, and decisions live in the helpers.
         LyricsSuccessFingerprint.method.addInstructions(
             0,
             """
@@ -208,35 +208,43 @@ val lyricsFallbackPatch = bytecodePatch(
 }
 
 /**
- * Play-button lyrics options (depends on the fallback above).
- *
- * Replaces the play/pause button's native long-press (sleep-timer bottom
- * sheet, `l$c.onLongClick`) with the lyrics options dialog for the current
- * song: artist/title retry, LRCLIB search picker, synced/plain toggle and
- * server-version restore. An existing, undiscoverable gesture with zero
- * tap interference — single taps, scrolling and playback are untouched.
- * Kept separate so the fallback can run without the dialog.
+ * Adds a first-party PageRow to Anghami's main Settings list and routes it
+ * to the lyrics options dialog. The play-button long-press is left native.
  */
 @Suppress("unused")
-val lyricsLongPressPatch = bytecodePatch(
-    name = "Lyrics options on play long-press",
-    description = "Long-press play/pause for lyrics options (retry, LRCLIB search, synced/plain toggle, server version) instead of the sleep timer. Pulls in 'LRCLIB lyrics fallback'.",
+val lyricsSettingsPatch = bytecodePatch(
+    name = "Lyrics options in Settings",
+    description = "Adds a Lyrics entry to Anghami Settings for LRCLIB search and AI translation options. Pulls in 'LRCLIB lyrics fallback'.",
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     dependsOn(lyricsFallbackPatch)
 
     execute {
-        // Unconditional early return: our dialog instead of the sleep
-        // timer. Branch-free const/return prepend (v0 free at entry,
-        // .locals 2); p0's `a` field is the player fragment for context.
-        PlayPauseLongPressFingerprint.method.addInstructions(
+        // Add the standard Settings PageRow after the Music category.
+        MainSettingsRowsFingerprint.method.addInstructions(
             0,
             """
-                iget-object v0, p0, Lcom/anghami/player/ui/l${'$'}c;->a:Lcom/anghami/player/ui/l;
-                invoke-static {v0}, $FALLBACK_HELPER->showLyricsOptions(Ljava/lang/Object;)V
-                const/4 v0, 0x1
-                return v0
+                invoke-static {p1}, $FALLBACK_HELPER->addLyricsSettingsRow(Ljava/lang/Object;)V
+            """
+        )
+
+        // Preserve the native click handler for every stock PageRow; the
+        // extension recognizes its sentinel row and opens the options dialog.
+        MainSettingsPageRowClickFingerprint.method.addInstructions(
+            0,
+            """
+                invoke-static {p0}, $FALLBACK_HELPER->handleSettingsPageRowClick(Ljava/lang/Object;)V
+                sget-object v0, LVd/E;->a:LVd/E;
+                return-object v0
+            """
+        )
+
+        // Keep the themed Settings Activity available for AlertDialog.
+        SettingsActivityOnCreateFingerprint.method.addInstructions(
+            0,
+            """
+                invoke-static {p0}, $FALLBACK_HELPER->rememberSettingsActivity(Ljava/lang/Object;)V
             """
         )
     }
@@ -254,7 +262,7 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
-    dependsOn(lyricsLongPressPatch)
+    dependsOn(lyricsSettingsPatch)
 
     execute {
         // Capture at the render choke point so lyrics loaded from Anghami's
