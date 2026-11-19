@@ -251,14 +251,15 @@ val lyricsSettingsPatch = bytecodePatch(
 }
 
 /**
- * Adds native-lyrics capture for the OpenRouter action in the lyrics options.
- * Capture at the renderer covers both API and StoredLyrics/cache responses;
+ * Adds native-lyrics capture and automatic translation for OpenRouter.
+ * Capture at the renderer covers API and StoredLyrics/cache responses;
  * truncated/empty responses are ignored so teasers are never translated.
+ * Long-pressing the player's Lyrics toggle opens the auto-translation dialog.
  */
 @Suppress("unused")
 val lyricsOpenRouterTranslationPatch = bytecodePatch(
     name = "AI lyrics translation · OpenRouter",
-    description = "Translates the full lyric with context, validates line alignment, and displays each translation beneath its original at the source timestamp. Configure OpenRouter in the lyrics options.",
+    description = "Adds optional automatic OpenRouter lyric translation, shown beneath each original line. Long-press the player Lyrics button to configure it.",
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
@@ -300,6 +301,15 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
                 iget-object v0, p0, LA7/F;->a:Lcom/anghami/ghost/pojo/Song;
                 iget-object v1, p0, LA7/F;->b:Ljava/lang/Object;
                 invoke-static {v0, p1, v1}, $FALLBACK_HELPER->rememberNativeLyrics(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+            """
+        )
+
+        // The Lyrics button uses a native View click listener. Add a
+        // separate long-click listener without changing its ordinary click.
+        PlayerLyricsButtonResumeFingerprint.method.addInstructions(
+            0,
+            """
+                invoke-static {p0}, $FALLBACK_HELPER->installLyricsButtonLongPress(Ljava/lang/Object;)V
             """
         )
     }
