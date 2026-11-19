@@ -181,3 +181,20 @@ object SettingsActivityOnCreateFingerprint : Fingerprint(
         )
     )
 )
+
+/**
+ * PlayerFragment.onResume has its Lyrics toggle view initialized and attaches
+ * the native click listener. The extension adds a separate long-click listener
+ * to that toggle; its ordinary click behavior remains untouched.
+ */
+object PlayerLyricsButtonResumeFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/player/ui/l;",
+    name = "onResume",
+    returnType = "V",
+    parameters = listOf(),
+    filters = listOf(
+        fieldAccess(
+            smali = "Lcom/anghami/player/ui/l;->V:Landroid/widget/FrameLayout;"
+        )
+    )
+)

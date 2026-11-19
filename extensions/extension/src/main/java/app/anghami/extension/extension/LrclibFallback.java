@@ -12,6 +12,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -34,10 +35,12 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -102,6 +105,8 @@ public final class LrclibFallback {
     private static long lastDialogMs;
     private static volatile WeakReference<Activity> settingsActivity =
             new WeakReference<Activity>(null);
+    private static volatile WeakReference<Object> playerFragment =
+            new WeakReference<Object>(null);
     private static final java.util.WeakHashMap<Object, String> renderedKeys =
             new java.util.WeakHashMap<Object, String>();
     private static final Map<String, WeakReference<Object>> lyricsCallbacks =
@@ -111,6 +116,8 @@ public final class LrclibFallback {
     private static Object translationCallback;
     private static boolean translationSourceSynced;
     private static final List<Line> translationSourceLines = new ArrayList<Line>();
+    private static final Set<String> translationRequestsInFlight =
+            new HashSet<String>();
 
     // ================= entry points =================
 
@@ -193,6 +200,132 @@ public final class LrclibFallback {
     public static void rememberSettingsActivity(Object activityObj) {
         if (activityObj instanceof Activity) {
             settingsActivity = new WeakReference<Activity>((Activity) activityObj);
+        }
+    }
+
+    /** Installs the separate long-press action on the player's Lyrics toggle. */
+    public static void installLyricsButtonLongPress(Object fragmentObj) {
+        try {
+            if (fragmentObj == null) return;
+            playerFragment = new WeakReference<Object>(fragmentObj);
+            Object targetObj = getFieldUp(fragmentObj, "V");
+            if (!(targetObj instanceof View)) return;
+            final WeakReference<Object> fragmentRef =
+                    new WeakReference<Object>(fragmentObj);
+            ((View) targetObj).setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View view) {
+                    showAutoTranslationDialog(view.getContext(), fragmentRef.get());
+                    return true;
+                }
+            });
+        } catch (Throwable t) {
+            Log.d(TAG, "installLyricsButtonLongPress failed: " + t);
+        }
+    }
+
+    private static void showAutoTranslationDialog(final Context ctx,
+                                                  final Object fragmentObj) {
+        try {
+            final OpenRouterSettings settings = readOpenRouterSettings(ctx);
+            LinearLayout layout = new LinearLayout(ctx);
+            layout.setOrientation(LinearLayout.VERTICAL);
+            int pad = (int) (16 * ctx.getResources().getDisplayMetrics().density);
+            layout.setPadding(pad, pad / 2, pad, 0);
+
+            TextView note = new TextView(ctx);
+            note.setText(tr("auto_translate_note"));
+            layout.addView(note);
+
+            final CheckBox enabled = new CheckBox(ctx);
+            enabled.setText(tr("auto_translate_toggle"));
+            enabled.setChecked(settings.autoTranslate);
+            layout.addView(enabled);
+
+            final AlertDialog dialog = new AlertDialog.Builder(ctx)
+                    .setTitle(tr("auto_translate_title"))
+                    .setView(layout)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .setNeutralButton(tr("configure_openrouter"), null)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .create();
+            dialog.show();
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View view) {
+                            final boolean turnOn = enabled.isChecked();
+                            OpenRouterSettings current = readOpenRouterSettings(ctx);
+                            if (turnOn && current.apiKey.trim().isEmpty()) {
+                                dialog.dismiss();
+                                showOpenRouterDialog(ctx, null, true, fragmentObj);
+                                return;
+                            }
+                            setAutoTranslationEnabled(ctx, turnOn);
+                            dialog.dismiss();
+                            Toast.makeText(ctx, tr(turnOn
+                                            ? "auto_translate_enabled"
+                                            : "auto_translate_disabled"),
+                                    Toast.LENGTH_SHORT).show();
+                            if (turnOn) {
+                                ensureLyricsMode(fragmentObj);
+                                Object song = currentSongFromPlayer(fragmentObj);
+                                if (song != null) autoTranslateIfEnabled(ctx, song);
+                            }
+                        }
+                    });
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                    .setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View view) {
+                            dialog.dismiss();
+                            showOpenRouterDialog(ctx, null, false, fragmentObj);
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.d(TAG, "showAutoTranslationDialog failed: " + t);
+        }
+    }
+
+    private static void setAutoTranslationEnabled(Context ctx, boolean enabled) {
+        try {
+            translationPrefs(ctx).edit()
+                    .putBoolean("auto_translate", enabled)
+                    .apply();
+        } catch (Throwable t) {
+            Log.d(TAG, "setAutoTranslationEnabled failed: " + t);
+        }
+    }
+
+    private static Object currentSongFromPlayer(Object fragmentObj) {
+        try {
+            if (fragmentObj != null) {
+                Method method = fragmentObj.getClass().getMethod("I0");
+                Object song = method.invoke(fragmentObj);
+                if (song != null) return song;
+            }
+        } catch (Throwable ignored) {
+        }
+        return currentPlayingSong();
+    }
+
+    /** Enables Lyrics mode without toggling it off when it is already active. */
+    private static void ensureLyricsMode(Object fragmentObj) {
+        try {
+            if (fragmentObj == null) return;
+            Object viewModel = getFieldUp(fragmentObj, "n1");
+            if (viewModel == null) return;
+            Object modeState = getFieldUp(viewModel, "_playerMode");
+            if (modeState == null) return;
+            Object currentMode = modeState.getClass().getMethod("d").invoke(modeState);
+            Class<?> modeClass =
+                    Class.forName("com.anghami.player.ui.PlayerFragmentViewModel$c");
+            Object lyricsMode = modeClass.getField("b").get(null);
+            if (currentMode != lyricsMode) {
+                viewModel.getClass().getMethod("onLyricsClicked").invoke(viewModel);
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "ensureLyricsMode failed: " + t);
         }
     }
 
@@ -778,14 +911,19 @@ public final class LrclibFallback {
             translationCallback = callbackObj;
             translationSourceSynced = synced;
             translationSourceLines.clear();
-            if (lines == null) return;
-            for (Line source : lines) {
-                if (source == null) continue;
-                Line copy = new Line();
-                copy.text = source.text == null ? "" : source.text;
-                copy.ms = source.ms;
-                translationSourceLines.add(copy);
+            if (lines != null) {
+                for (Line source : lines) {
+                    if (source == null) continue;
+                    Line copy = new Line();
+                    copy.text = source.text == null ? "" : source.text;
+                    copy.ms = source.ms;
+                    translationSourceLines.add(copy);
+                }
             }
+        }
+        if (lines != null && !lines.isEmpty()) {
+            Context ctx = appContextOf(callbackObj);
+            if (ctx != null) autoTranslateIfEnabled(ctx, songObj);
         }
     }
 
@@ -1054,6 +1192,46 @@ public final class LrclibFallback {
             if (ar) return "ستظهر الترجمة أسفل كل سطر أصلي مع الحفاظ على التوقيت.";
             if (fr) return "La traduction apparaît sous chaque ligne originale, synchronisée.";
             return "Translations appear below each original line and keep lyric timing.";
+        }
+        if ("auto_translate_title".equals(key)) {
+            if (ar) return "الترجمة التلقائية للكلمات";
+            if (fr) return "Traduction automatique des paroles";
+            return "Automatic lyrics translation";
+        }
+        if ("auto_translate_note".equals(key)) {
+            if (ar) return "عند التفعيل، ستُترجم الكلمات تلقائياً عند تحميلها. تظهر الترجمة أسفل كل سطر أصلي.";
+            if (fr) return "Une fois activée, la traduction se lance au chargement des paroles et apparaît sous chaque ligne originale.";
+            return "When enabled, lyrics are translated as they load and appear beneath each original line.";
+        }
+        if ("auto_translate_toggle".equals(key)) {
+            if (ar) return "ترجمة الكلمات تلقائياً";
+            if (fr) return "Traduire automatiquement les paroles";
+            return "Automatically translate lyrics";
+        }
+        if ("auto_translate_enabled".equals(key)) {
+            if (ar) return "تم تفعيل الترجمة التلقائية للكلمات";
+            if (fr) return "Traduction automatique des paroles activée";
+            return "Automatic lyrics translation enabled";
+        }
+        if ("auto_translate_disabled".equals(key)) {
+            if (ar) return "تم إيقاف الترجمة التلقائية للكلمات";
+            if (fr) return "Traduction automatique des paroles désactivée";
+            return "Automatic lyrics translation disabled";
+        }
+        if ("configure_openrouter".equals(key)) {
+            if (ar) return "إعداد OpenRouter";
+            if (fr) return "Configurer OpenRouter";
+            return "Configure OpenRouter";
+        }
+        if ("save_settings".equals(key)) {
+            if (ar) return "حفظ";
+            if (fr) return "Enregistrer";
+            return "Save";
+        }
+        if ("settings_saved".equals(key)) {
+            if (ar) return "تم حفظ إعدادات OpenRouter";
+            if (fr) return "Paramètres OpenRouter enregistrés";
+            return "OpenRouter settings saved";
         }
         if ("openrouter_key".equals(key)) {
             if (ar) return "مفتاح OpenRouter API";
@@ -1943,6 +2121,7 @@ public final class LrclibFallback {
         String apiKey = "";
         String model = DEFAULT_OPENROUTER_MODEL;
         String language = "English";
+        boolean autoTranslate;
     }
 
     private static SharedPreferences translationPrefs(Context ctx) {
@@ -1958,6 +2137,7 @@ public final class LrclibFallback {
             String defaultLanguage = "ar".equalsIgnoreCase(Locale.getDefault().getLanguage())
                     ? "Arabic" : "English";
             settings.language = p.getString("language", defaultLanguage);
+            settings.autoTranslate = p.getBoolean("auto_translate", false);
         } catch (Throwable t) {
             Log.d(TAG, "OpenRouter settings read failed: " + t);
         }
@@ -1974,8 +2154,16 @@ public final class LrclibFallback {
     }
 
     private static void showOpenRouterDialog(final Context ctx, final Object song) {
-        final SourceSnapshot initialSource = translationSourceFor(song);
-        if (initialSource == null) {
+        showOpenRouterDialog(ctx, song, false, null);
+    }
+
+    private static void showOpenRouterDialog(final Context ctx, final Object song,
+                                             final boolean enableAutoOnSave,
+                                             final Object fragmentObj) {
+        final boolean configOnly = song == null;
+        final SourceSnapshot initialSource =
+                configOnly ? null : translationSourceFor(song);
+        if (!configOnly && initialSource == null) {
             Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
             return;
         }
@@ -2013,7 +2201,7 @@ public final class LrclibFallback {
         final AlertDialog dialog = new AlertDialog.Builder(ctx)
                 .setTitle(tr("ai_title"))
                 .setView(layout)
-                .setPositiveButton(tr("translate_now"), null)
+                .setPositiveButton(tr(configOnly ? "save_settings" : "translate_now"), null)
                 .setNegativeButton(android.R.string.cancel, null)
                 .create();
         dialog.show();
@@ -2028,6 +2216,25 @@ public final class LrclibFallback {
                             Toast.LENGTH_SHORT).show();
                     return;
                 }
+                saveOpenRouterSettings(ctx, apiKey, model, language);
+                if (configOnly) {
+                    dialog.dismiss();
+                    if (enableAutoOnSave || settings.autoTranslate) {
+                        setAutoTranslationEnabled(ctx, true);
+                        Object activeFragment = fragmentObj != null
+                                ? fragmentObj
+                                : playerFragment == null ? null : playerFragment.get();
+                        ensureLyricsMode(activeFragment);
+                        Object activeSong = currentSongFromPlayer(activeFragment);
+                        if (activeSong != null) autoTranslateIfEnabled(ctx, activeSong);
+                        Toast.makeText(ctx, tr("auto_translate_enabled"),
+                                Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(ctx, tr("settings_saved"),
+                                Toast.LENGTH_SHORT).show();
+                    }
+                    return;
+                }
                 final SourceSnapshot snapshot = translationSourceFor(song);
                 if (snapshot == null) {
                     Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
@@ -2040,7 +2247,6 @@ public final class LrclibFallback {
                             Toast.LENGTH_LONG).show();
                     return;
                 }
-                saveOpenRouterSettings(ctx, apiKey, model, language);
                 dialog.dismiss();
                 translateAndRender(ctx, song, snapshot, apiKey, model, language);
             }
@@ -2059,12 +2265,54 @@ public final class LrclibFallback {
         return count;
     }
 
+    private static void autoTranslateIfEnabled(final Context ctx, final Object song) {
+        try {
+            if (ctx == null || song == null) return;
+            final OpenRouterSettings settings = readOpenRouterSettings(ctx);
+            if (!settings.autoTranslate || settings.apiKey.trim().isEmpty()
+                    || settings.model.trim().isEmpty()
+                    || settings.language.trim().isEmpty()) return;
+            final SourceSnapshot snapshot = translationSourceFor(song);
+            if (snapshot == null || snapshot.lines.isEmpty()
+                    || snapshot.lines.size() > MAX_TRANSLATION_LINES
+                    || sourceCharacterCount(snapshot.lines) > MAX_TRANSLATION_CHARS) {
+                return;
+            }
+            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                @Override
+                public void run() {
+                    OpenRouterSettings current = readOpenRouterSettings(ctx);
+                    if (!current.autoTranslate || current.apiKey.trim().isEmpty()
+                            || current.model.trim().isEmpty()
+                            || current.language.trim().isEmpty()) return;
+                    SourceSnapshot latest = translationSourceFor(song);
+                    if (latest == null || !latest.songId.equals(snapshot.songId)
+                            || !sameSourceLines(latest.lines, snapshot.lines)) return;
+                    translateAndRender(ctx, song, latest, current.apiKey,
+                            current.model, current.language, false);
+                }
+            });
+        } catch (Throwable t) {
+            Log.d(TAG, "autoTranslateIfEnabled failed: " + t);
+        }
+    }
+
     private static void translateAndRender(final Context ctx, final Object song,
                                            final SourceSnapshot snapshot,
                                            final String apiKey, final String model,
                                            final String language) {
+        translateAndRender(ctx, song, snapshot, apiKey, model, language, true);
+    }
+
+    private static void translateAndRender(final Context ctx, final Object song,
+                                           final SourceSnapshot snapshot,
+                                           final String apiKey, final String model,
+                                           final String language,
+                                           final boolean interactive) {
         if (snapshot.lines.isEmpty()) {
-            Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
+            if (interactive) {
+                Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
+            }
             return;
         }
         final String cacheKey;
@@ -2074,10 +2322,27 @@ public final class LrclibFallback {
             Toast.makeText(ctx, tr("translation_failed"), Toast.LENGTH_SHORT).show();
             return;
         }
-        final ProgressDialog progress = new ProgressDialog(ctx);
-        progress.setMessage(tr("translating"));
-        progress.setCancelable(false);
-        progress.show();
+        final String requestKey = cacheKey + "|" + snapshot.songId;
+        synchronized (LrclibFallback.class) {
+            if (!translationRequestsInFlight.add(requestKey)) return;
+        }
+        final ProgressDialog progress;
+        try {
+            if (interactive) {
+                progress = new ProgressDialog(ctx);
+                progress.setMessage(tr("translating"));
+                progress.setCancelable(false);
+                progress.show();
+            } else {
+                progress = null;
+            }
+        } catch (Throwable t) {
+            synchronized (LrclibFallback.class) {
+                translationRequestsInFlight.remove(requestKey);
+            }
+            Log.d(TAG, "could not show translation progress: " + t);
+            return;
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -2100,27 +2365,37 @@ public final class LrclibFallback {
                     @Override
                     public void run() {
                         try {
-                            if (progress.isShowing()) progress.dismiss();
+                            if (progress != null && progress.isShowing()) progress.dismiss();
                         } catch (Throwable ignored) {
                         }
-                        if (error != null || result == null) {
-                            String message = tr("translation_failed");
-                            if (error != null && !error.trim().isEmpty()) {
-                                message += ": " + error;
+                        try {
+                            if (error != null || result == null) {
+                                String message = tr("translation_failed");
+                                if (error != null && !error.trim().isEmpty()) {
+                                    message += ": " + error;
+                                }
+                                Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
+                                return;
                             }
-                            Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
-                            return;
+                            SourceSnapshot current = translationSourceFor(song);
+                            if (current == null || !current.songId.equals(snapshot.songId)
+                                    || !sameSourceLines(current.lines, snapshot.lines)) {
+                                if (interactive) {
+                                    Toast.makeText(ctx, tr("source_changed"),
+                                            Toast.LENGTH_SHORT).show();
+                                }
+                                return;
+                            }
+                            renderDualLines(song, current.callback, snapshot, result);
+                            if (interactive) {
+                                Toast.makeText(ctx, tr("translation_done"),
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        } finally {
+                            synchronized (LrclibFallback.class) {
+                                translationRequestsInFlight.remove(requestKey);
+                            }
                         }
-                        SourceSnapshot current = translationSourceFor(song);
-                        if (current == null || !current.songId.equals(snapshot.songId)
-                                || !sameSourceLines(current.lines, snapshot.lines)) {
-                            Toast.makeText(ctx, tr("source_changed"),
-                                    Toast.LENGTH_SHORT).show();
-                            return;
-                        }
-                        renderDualLines(song, current.callback, snapshot, result);
-                        Toast.makeText(ctx, tr("translation_done"),
-                                Toast.LENGTH_SHORT).show();
                     }
                 });
             }
