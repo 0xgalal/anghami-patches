@@ -1,5 +1,6 @@
 package app.anghami.extension.extension;
 
+import org.json.JSONObject;
 import org.junit.Test;
 
 import java.util.List;
@@ -34,5 +35,12 @@ public class LrclibWaterfallTest {
     public void missingMetadataProducesNoExactQueries() {
         assertTrue(LrclibFallback.waterfallPairs("Song", "").isEmpty());
         assertTrue(LrclibFallback.waterfallPairs("", "Artist").isEmpty());
+    }
+
+    @Test
+    public void restoredOptionsDialogLabelsCandidates() throws Exception {
+        JSONObject candidate = new JSONObject()
+                .put("trackName", "Song").put("artistName", "Artist").put("duration", 185.0);
+        assertEquals("Song — Artist (3:05)", LrclibFallback.candidateLabel(candidate));
     }
 }
