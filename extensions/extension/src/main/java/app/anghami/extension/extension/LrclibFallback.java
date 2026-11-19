@@ -23,6 +23,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import app.anghami.extension.extension.TranslationProvider.Model;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -82,23 +84,8 @@ public final class LrclibFallback {
     private static final String UA = "AnghamiLyricsFallback/1.0 (+https://lrclib.net/docs)";
     private static final String PREFS = "lyrics_fallback";
     private static final String KEY_VERSION = "v1";
+    // Retain the preference file so existing credentials and caches survive upgrades.
     private static final String TRANSLATION_PREFS = "lyrics_openrouter";
-    private static final String OPENROUTER_URL =
-            "https://openrouter.ai/api/v1/chat/completions";
-    private static final String OPENROUTER_MODELS_URL =
-            "https://openrouter.ai/api/v1/models";
-    private static final String DEFAULT_OPENROUTER_MODEL =
-            "inception/mercury-2.5-preview";
-    private static final String[] FALLBACK_OPENROUTER_MODELS = {
-            "inception/mercury-2.5-preview",
-            "meta/muse-spark-1.3",
-            "z-ai/glm-5.3-flash",
-            "qwen/qwen3.8-flash",
-            "~deepseek/deepseek-v4-flash-latest",
-            "~openai/gpt-mini-latest",
-            "openai/gpt-oss-120b",
-            "~google/gemini-flash-latest",
-    };
     private static final long POS_TTL_MS = 30L * 24 * 3600 * 1000;
     private static final long NEG_TTL_MS = 7L * 24 * 3600 * 1000;
     private static final int MAX_ENTRIES = 500;
@@ -151,7 +138,7 @@ public final class LrclibFallback {
 
     /**
      * Captures the exact native lyrics payload before the app renders it.
-     * The OpenRouter action later combines each translated line with its
+     * The translation action later combines each translated line with its
      * original line and retains the source timestamp for synced lyrics.
      */
     public static void rememberNativeLyrics(Object songObj, Object responseObj,
@@ -245,7 +232,7 @@ public final class LrclibFallback {
     private static void showAutoTranslationDialog(final Context ctx,
                                                   final Object fragmentObj) {
         try {
-            showOpenRouterDialog(ctx, null, fragmentObj, true);
+            showTranslationDialog(ctx, null, fragmentObj, true);
         } catch (Throwable t) {
             Log.d(TAG, "showAutoTranslationDialog failed: " + t);
         }
@@ -1143,9 +1130,9 @@ public final class LrclibFallback {
             return "Instrumental";
         }
         if ("ai_translate".equals(key)) {
-            if (ar) return "ترجمة الكلمات بالذكاء الاصطناعي · OpenRouter";
-            if (fr) return "Traduire les paroles par IA · OpenRouter";
-            return "AI translate lyrics · OpenRouter";
+            if (ar) return "ترجمة الكلمات بالذكاء الاصطناعي";
+            if (fr) return "Traduire les paroles par IA";
+            return "AI translate lyrics";
         }
         if ("ai_title".equals(key)) {
             if (ar) return "ترجمة الكلمات بالذكاء الاصطناعي";
@@ -1193,9 +1180,9 @@ public final class LrclibFallback {
             return "Save";
         }
         if ("settings_saved".equals(key)) {
-            if (ar) return "تم حفظ إعدادات OpenRouter";
-            if (fr) return "Paramètres OpenRouter enregistrés";
-            return "OpenRouter settings saved";
+            if (ar) return "تم حفظ إعدادات الترجمة";
+            if (fr) return "Paramètres de traduction enregistrés";
+            return "Translation settings saved";
         }
         if ("provider_section".equals(key)) {
             if (ar) return "موفّر الخدمة";
@@ -1207,8 +1194,10 @@ public final class LrclibFallback {
             if (fr) return "Fournisseur";
             return "Provider";
         }
-        if ("provider_openrouter".equals(key)) {
-            return "OpenRouter";
+        if ("opencode_note".equals(key)) {
+            if (ar) return "استخدم مفتاح API من OpenCode Console ونموذجاً مدفوعاً. النماذج المجانية متاحة داخل تطبيق OpenCode فقط.";
+            if (fr) return "Utilisez une clé API OpenCode Console et un modèle payant. Les modèles gratuits sont réservés à l’application OpenCode.";
+            return "Use an OpenCode Console API key and a paid model. Free chat models are available only inside the OpenCode app.";
         }
         if ("model_label".equals(key)) {
             if (ar) return "النموذج";
@@ -1266,14 +1255,14 @@ public final class LrclibFallback {
             return "Select model";
         }
         if ("fetching_models".equals(key)) {
-            if (ar) return "جارٍ جلب النماذج المجانية من OpenRouter…";
-            if (fr) return "Chargement des modèles gratuits depuis OpenRouter…";
-            return "Fetching free models from OpenRouter…";
+            if (ar) return "جارٍ جلب النماذج من %s…";
+            if (fr) return "Chargement des modèles depuis %s…";
+            return "Fetching models from %s…";
         }
         if ("models_fetch_failed".equals(key)) {
-            if (ar) return "تعذر جلب النماذج المجانية؛ يتم عرض القائمة الاحتياطية";
-            if (fr) return "Impossible de charger les modèles gratuits ; liste de secours affichée";
-            return "Couldn't fetch free models; showing the built-in list";
+            if (ar) return "تعذر جلب النماذج؛ يتم عرض القائمة الاحتياطية";
+            if (fr) return "Impossible de charger les modèles ; liste de secours affichée";
+            return "Couldn't fetch models; showing the built-in list";
         }
         if ("edit_model".equals(key)) {
             if (ar) return "معرّف نموذج مخصص";
@@ -1330,7 +1319,7 @@ public final class LrclibFallback {
             if (fr) return "Traduire";
             return "Translate now";
         }
-        if ("openrouter_config_required".equals(key)) {
+        if ("translation_config_required".equals(key)) {
             if (ar) return "أدخل مفتاح API والنموذج ولغة الترجمة";
             if (fr) return "Saisissez la clé API, le modèle et la langue cible";
             return "Enter an API key, model, and target language";
@@ -1346,9 +1335,9 @@ public final class LrclibFallback {
             return "Lyrics are too long to translate in one request";
         }
         if ("translating".equals(key)) {
-            if (ar) return "جارٍ ترجمة الكلمات عبر OpenRouter…";
-            if (fr) return "Traduction des paroles via OpenRouter…";
-            return "Translating lyrics with OpenRouter…";
+            if (ar) return "جارٍ ترجمة الكلمات عبر %s…";
+            if (fr) return "Traduction des paroles via %s…";
+            return "Translating lyrics with %s…";
         }
         if ("translation_failed".equals(key)) {
             if (ar) return "فشلت ترجمة الكلمات";
@@ -2023,7 +2012,7 @@ public final class LrclibFallback {
                 @Override
                 public void onClick(View v) {
                     dialog.dismiss();
-                    showOpenRouterDialog(v.getContext(), song);
+                    showTranslationDialog(v.getContext(), song);
                 }
             });
         }
@@ -2192,59 +2181,87 @@ public final class LrclibFallback {
         }
     }
 
-    // ================= OpenRouter dual-line translation =================
+    // ================= Dual-line AI translation =================
 
-    private static final class OpenRouterSettings {
+    private static final class TranslationSettings {
+        final TranslationProvider provider;
         String apiKey = "";
-        String model = DEFAULT_OPENROUTER_MODEL;
+        String model;
         String language = "English";
         String systemPrompt = "";
         boolean autoTranslate;
+
+        TranslationSettings(TranslationProvider provider) {
+            this.provider = provider;
+            this.model = provider.defaultModel;
+        }
     }
 
     private static SharedPreferences translationPrefs(Context ctx) {
         return ctx.getSharedPreferences(TRANSLATION_PREFS, Context.MODE_PRIVATE);
     }
 
-    private static OpenRouterSettings readOpenRouterSettings(Context ctx) {
-        OpenRouterSettings settings = new OpenRouterSettings();
+    private static TranslationSettings readTranslationSettings(Context ctx) {
+        TranslationProvider provider = TranslationProvider.fromId(
+                translationPrefs(ctx).getString("provider", null));
+        return readTranslationSettings(ctx, provider);
+    }
+
+    private static TranslationSettings readTranslationSettings(Context ctx,
+                                                               TranslationProvider provider) {
+        TranslationSettings settings = new TranslationSettings(provider);
         try {
             SharedPreferences p = translationPrefs(ctx);
-            String apiKey = p.getString("api_key", "");
-            String model = p.getString("model", DEFAULT_OPENROUTER_MODEL);
+            String apiKey = p.getString(provider.preferenceKey("api_key"), "");
+            String model = p.getString(provider.preferenceKey("model"), provider.defaultModel);
             String defaultLanguage = "ar".equalsIgnoreCase(Locale.getDefault().getLanguage())
                     ? "Arabic" : "English";
             String language = p.getString("language", defaultLanguage);
             String systemPrompt = p.getString("system_prompt", "");
             settings.apiKey = apiKey == null ? "" : apiKey;
-            settings.model = model == null ? DEFAULT_OPENROUTER_MODEL : model;
+            settings.model = model == null ? provider.defaultModel : model;
             settings.language = language == null ? defaultLanguage : language;
             settings.systemPrompt = systemPrompt == null ? "" : systemPrompt;
             settings.autoTranslate = p.getBoolean("auto_translate", false);
         } catch (Throwable t) {
-            Log.d(TAG, "OpenRouter settings read failed: " + t);
+            Log.d(TAG, "Translation settings read failed: " + t);
         }
         return settings;
     }
 
-    private static void saveOpenRouterSettings(Context ctx, String apiKey,
-                                               String model, String language,
-                                               String systemPrompt) {
-        translationPrefs(ctx).edit()
-                .putString("api_key", apiKey)
-                .putString("model", model)
+    private static void saveTranslationSettings(Context ctx, TranslationProvider provider,
+                                                TranslationSettings[] drafts, String language,
+                                                String systemPrompt) {
+        SharedPreferences.Editor editor = translationPrefs(ctx).edit()
+                .putString("provider", provider.id)
                 .putString("language", language)
-                .putString("system_prompt", systemPrompt)
-                .apply();
+                .putString("system_prompt", systemPrompt);
+        for (TranslationSettings draft : drafts) {
+            editor.putString(draft.provider.preferenceKey("api_key"), trimOrEmpty(draft.apiKey))
+                    .putString(draft.provider.preferenceKey("model"), trimOrEmpty(draft.model));
+        }
+        editor.apply();
     }
 
-    private static void showOpenRouterDialog(final Context ctx, final Object song) {
-        showOpenRouterDialog(ctx, song, null, false);
+    private static String openCodeSessionId(Context ctx) {
+        synchronized (LrclibFallback.class) {
+            SharedPreferences prefs = translationPrefs(ctx);
+            String session = prefs.getString("opencode_session_id", "");
+            if (session == null || session.trim().isEmpty()) {
+                session = "ses_" + java.util.UUID.randomUUID().toString();
+                prefs.edit().putString("opencode_session_id", session).apply();
+            }
+            return session;
+        }
     }
 
-    private static void showOpenRouterDialog(final Context ctx, final Object song,
-                                             final Object fragmentObj,
-                                             final boolean includeAutoToggle) {
+    private static void showTranslationDialog(final Context ctx, final Object song) {
+        showTranslationDialog(ctx, song, null, false);
+    }
+
+    private static void showTranslationDialog(final Context ctx, final Object song,
+                                               final Object fragmentObj,
+                                               final boolean includeAutoToggle) {
         final boolean configOnly = song == null;
         final SourceSnapshot initialSource =
                 configOnly ? null : translationSourceFor(song);
@@ -2252,11 +2269,25 @@ public final class LrclibFallback {
             Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
             return;
         }
-        final OpenRouterSettings settings = readOpenRouterSettings(ctx);
-        final String[] apiKey = {settings.apiKey};
-        final String[] model = {settings.model};
+        final TranslationSettings settings = readTranslationSettings(ctx);
+        final TranslationProvider[] providers = TranslationProvider.values();
+        final TranslationProvider[] provider = {settings.provider};
+        final TranslationSettings[] drafts = new TranslationSettings[providers.length];
+        final String[] providerNames = new String[providers.length];
+        for (TranslationProvider value : providers) {
+            drafts[value.ordinal()] = readTranslationSettings(ctx, value);
+            providerNames[value.ordinal()] = value.displayName;
+        }
         final String[] language = {settings.language};
         final String[] systemPrompt = {settings.systemPrompt};
+        final TextView[] credentialSummaries = new TextView[2];
+        final TextView providerNote = new TextView(ctx);
+        providerNote.setText(tr("opencode_note"));
+        providerNote.setTextColor(Color.rgb(166, 172, 181));
+        providerNote.setTextSize(13);
+        providerNote.setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 8));
+        providerNote.setVisibility(provider[0] == TranslationProvider.OPENCODE
+                ? View.VISIBLE : View.GONE);
 
         LinearLayout rows = new LinearLayout(ctx);
         rows.setOrientation(LinearLayout.VERTICAL);
@@ -2289,33 +2320,68 @@ public final class LrclibFallback {
         }
 
         addSettingsSection(ctx, rows, tr("provider_section"));
-        addSettingsRow(ctx, rows, tr("provider"), tr("provider_openrouter"), null);
+        addSettingsRow(ctx, rows, tr("provider"), provider[0].displayName,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(final View view) {
+                        new AlertDialog.Builder(ctx)
+                                .setTitle(tr("provider"))
+                                .setSingleChoiceItems(providerNames, provider[0].ordinal(),
+                                        new DialogInterface.OnClickListener() {
+                                            @Override
+                                            public void onClick(DialogInterface dialog, int which) {
+                                                provider[0] = providers[which];
+                                                TranslationSettings draft = drafts[which];
+                                                refreshSettingsSummary(view, tr("provider"),
+                                                        provider[0].displayName);
+                                                credentialSummaries[0].setText(maskedApiKey(draft.apiKey));
+                                                credentialSummaries[1].setText(draft.model);
+                                                providerNote.setVisibility(
+                                                        provider[0] == TranslationProvider.OPENCODE
+                                                                ? View.VISIBLE : View.GONE);
+                                                dialog.dismiss();
+                                            }
+                                        })
+                                .setNegativeButton(android.R.string.cancel, null)
+                                .show();
+                    }
+                });
+        rows.addView(providerNote, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         addSettingsSection(ctx, rows, tr("api_credentials"));
-        addSettingsRow(ctx, rows, tr("api_key_label"), maskedApiKey(apiKey[0]), new View.OnClickListener() {
+        credentialSummaries[0] = addSettingsRow(ctx, rows, tr("api_key_label"),
+                maskedApiKey(settings.apiKey), new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                showTextSettingDialog(ctx, tr("edit_api_key"), apiKey[0],
+                final TranslationSettings draft = drafts[provider[0].ordinal()];
+                showTextSettingDialog(ctx, draft.provider.displayName + " · " + tr("edit_api_key"),
+                        draft.apiKey,
                         android.text.InputType.TYPE_CLASS_TEXT
                                 | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD,
                         false, new TextSettingListener() {
                             @Override
                             public void onValueChanged(String value) {
-                                apiKey[0] = value;
-                                refreshSettingsSummary(view, tr("api_key_label"),
-                                        maskedApiKey(value));
+                                draft.apiKey = value;
+                                if (provider[0] == draft.provider) {
+                                    credentialSummaries[0].setText(maskedApiKey(value));
+                                }
                             }
                         });
             }
         });
-        addSettingsRow(ctx, rows, tr("model_label"), model[0], new View.OnClickListener() {
+        credentialSummaries[1] = addSettingsRow(ctx, rows, tr("model_label"), settings.model,
+                new View.OnClickListener() {
             @Override
             public void onClick(final View view) {
-                showModelSelector(ctx, model[0], new ModelSelectionListener() {
+                final TranslationSettings draft = drafts[provider[0].ordinal()];
+                showModelSelector(ctx, draft.provider, draft.model, new ModelSelectionListener() {
                     @Override
                     public void onModelSelected(String value) {
-                        model[0] = value;
-                        refreshSettingsSummary(view, tr("model_label"), value);
+                        draft.model = value;
+                        if (provider[0] == draft.provider) {
+                            credentialSummaries[1].setText(value);
+                        }
                     }
                 });
             }
@@ -2373,8 +2439,10 @@ public final class LrclibFallback {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                final String apiKeyValue = trimOrEmpty(apiKey[0]);
-                final String modelValue = trimOrEmpty(model[0]);
+                final TranslationProvider providerValue = provider[0];
+                final TranslationSettings draft = drafts[providerValue.ordinal()];
+                final String apiKeyValue = trimOrEmpty(draft.apiKey);
+                final String modelValue = trimOrEmpty(draft.model);
                 final String languageValue = trimOrEmpty(language[0]);
                 final String systemPromptValue = trimOrEmpty(systemPrompt[0]);
                 final boolean autoTranslateEnabled = includeAutoToggle
@@ -2382,11 +2450,11 @@ public final class LrclibFallback {
                 boolean requiresApiKey = !configOnly || autoTranslateEnabled;
                 if ((requiresApiKey && apiKeyValue.isEmpty())
                         || modelValue.isEmpty() || languageValue.isEmpty()) {
-                    Toast.makeText(ctx, tr("openrouter_config_required"),
+                    Toast.makeText(ctx, tr("translation_config_required"),
                             Toast.LENGTH_SHORT).show();
                     return;
                 }
-                saveOpenRouterSettings(ctx, apiKeyValue, modelValue, languageValue,
+                saveTranslationSettings(ctx, providerValue, drafts, languageValue,
                         systemPromptValue);
                 if (configOnly) {
                     dialog.dismiss();
@@ -2425,8 +2493,8 @@ public final class LrclibFallback {
                     return;
                 }
                 dialog.dismiss();
-                translateAndRender(ctx, song, snapshot, apiKeyValue, modelValue,
-                        languageValue, systemPromptValue);
+                translateAndRender(ctx, song, snapshot, providerValue, apiKeyValue, modelValue,
+                        languageValue, systemPromptValue, true);
             }
         });
     }
@@ -2441,24 +2509,6 @@ public final class LrclibFallback {
 
     private interface ModelSelectionListener {
         void onModelSelected(String model);
-    }
-
-    private static final class OpenRouterModel {
-        final String id;
-        final String name;
-        final boolean free;
-
-        OpenRouterModel(String id, String name, boolean free) {
-            this.id = id;
-            this.name = name;
-            this.free = free;
-        }
-
-        String displayName() {
-            String label = name == null || name.trim().isEmpty() ? id : name.trim();
-            if (!label.equals(id)) label += " — " + id;
-            return free ? label + " · FREE" : label;
-        }
     }
 
     private static int dp(Context ctx, int value) {
@@ -2570,50 +2620,55 @@ public final class LrclibFallback {
         }
     }
 
-    private static void showModelSelector(final Context ctx, final String currentModel,
+    private static void showModelSelector(final Context ctx, final TranslationProvider provider,
+                                          final String currentModel,
                                           final ModelSelectionListener listener) {
         final ProgressDialog progress = new ProgressDialog(ctx);
-        progress.setMessage(tr("fetching_models"));
-        progress.setCancelable(false);
+        progress.setMessage(String.format(tr("fetching_models"), provider.displayName));
+        progress.setCancelable(true);
         progress.show();
         new Thread(new Runnable() {
             @Override
             public void run() {
-                List<OpenRouterModel> models = null;
+                List<Model> models = null;
                 boolean fetchFailed = false;
                 try {
-                    models = fetchFreeOpenRouterModels();
+                    models = fetchTranslationModels(provider);
                     if (models.isEmpty()) fetchFailed = true;
                 } catch (Throwable t) {
                     fetchFailed = true;
-                    Log.d(TAG, "OpenRouter model catalog fetch failed: " + t);
+                    Log.d(TAG, provider.displayName + " model catalog fetch failed: " + t);
                 }
-                final List<OpenRouterModel> result = models == null || models.isEmpty()
-                        ? fallbackOpenRouterModels() : models;
+                final List<Model> result = models == null || models.isEmpty()
+                        ? provider.fallbackModels() : models;
                 final boolean showFallbackMessage = fetchFailed;
                 new Handler(Looper.getMainLooper()).post(new Runnable() {
                     @Override
                     public void run() {
                         try {
-                            if (progress.isShowing()) progress.dismiss();
-                        } catch (Throwable ignored) {
+                            if (!progress.isShowing()) return;
+                            progress.dismiss();
+                            if (ctx instanceof Activity
+                                    && (((Activity) ctx).isFinishing()
+                                    || ((Activity) ctx).isDestroyed())) return;
+                            if (showFallbackMessage) {
+                                Toast.makeText(ctx, tr("models_fetch_failed"),
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                            showModelSelectorDialog(ctx, provider, currentModel, listener, result);
+                        } catch (Throwable t) {
+                            Log.d(TAG, "Could not show model selector: " + t);
                         }
-                        if (showFallbackMessage) {
-                            Toast.makeText(ctx, tr("models_fetch_failed"),
-                                    Toast.LENGTH_SHORT).show();
-                        }
-                        showModelSelectorDialog(ctx, currentModel, listener, result);
                     }
                 });
             }
         }).start();
     }
 
-    private static List<OpenRouterModel> fetchFreeOpenRouterModels() throws Exception {
+    private static List<Model> fetchTranslationModels(TranslationProvider provider) throws Exception {
         HttpURLConnection connection = null;
-        BufferedReader reader = null;
         try {
-            connection = (HttpURLConnection) new URL(OPENROUTER_MODELS_URL).openConnection();
+            connection = (HttpURLConnection) new URL(provider.modelsUrl).openConnection();
             connection.setRequestMethod("GET");
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("User-Agent", "AnghamiLyricsFallback/1.0");
@@ -2621,73 +2676,18 @@ public final class LrclibFallback {
             connection.setReadTimeout(HTTP_TIMEOUT_MS);
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
-                throw new Exception("OpenRouter returned HTTP " + status);
+                throw new Exception(provider.displayName + " returned HTTP " + status);
             }
-
-            reader = new BufferedReader(new InputStreamReader(
-                    connection.getInputStream(), "UTF-8"));
-            StringBuilder body = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) body.append(line);
-            JSONArray data = new JSONObject(body.toString()).optJSONArray("data");
-            List<OpenRouterModel> models = new ArrayList<OpenRouterModel>();
-            Set<String> seen = new HashSet<String>();
-            if (data == null) return models;
-            for (int i = 0; i < data.length(); i++) {
-                JSONObject model = data.optJSONObject(i);
-                if (model == null) continue;
-                String id = model.optString("id", "").trim();
-                if (id.isEmpty() || !seen.add(id)) continue;
-                JSONObject pricing = model.optJSONObject("pricing");
-                boolean free = id.endsWith(":free")
-                        || (pricing != null
-                        && isZeroPrice(pricing.optString("prompt", null))
-                        && isZeroPrice(pricing.optString("completion", null)));
-                if (!free) continue;
-                String name = model.optString("name", id).trim();
-                models.add(new OpenRouterModel(id,
-                        name.isEmpty() ? id : name, true));
-            }
-            Collections.sort(models, new Comparator<OpenRouterModel>() {
-                @Override
-                public int compare(OpenRouterModel left, OpenRouterModel right) {
-                    int byName = left.name.compareToIgnoreCase(right.name);
-                    return byName != 0 ? byName : left.id.compareToIgnoreCase(right.id);
-                }
-            });
-            return models;
+            return provider.parseModels(readUtf8(connection.getInputStream()));
         } finally {
-            if (reader != null) {
-                try {
-                    reader.close();
-                } catch (Exception ignored) {
-                }
-            }
             if (connection != null) connection.disconnect();
         }
     }
 
-    private static boolean isZeroPrice(String value) {
-        if (value == null) return false;
-        try {
-            return Double.parseDouble(value.trim()) == 0.0d;
-        } catch (NumberFormatException ignored) {
-            return false;
-        }
-    }
-
-    private static List<OpenRouterModel> fallbackOpenRouterModels() {
-        List<OpenRouterModel> models =
-                new ArrayList<OpenRouterModel>(FALLBACK_OPENROUTER_MODELS.length);
-        for (String model : FALLBACK_OPENROUTER_MODELS) {
-            models.add(new OpenRouterModel(model, model, false));
-        }
-        return models;
-    }
-
-    private static void showModelSelectorDialog(final Context ctx, final String currentModel,
+    private static void showModelSelectorDialog(final Context ctx, final TranslationProvider provider,
+                                                final String currentModel,
                                                 final ModelSelectionListener listener,
-                                                final List<OpenRouterModel> models) {
+                                                final List<Model> models) {
         final String[] choices = new String[models.size() + 1];
         for (int i = 0; i < models.size(); i++) {
             choices[i] = models.get(i).displayName();
@@ -2695,7 +2695,7 @@ public final class LrclibFallback {
         choices[models.size()] = tr("model_custom");
         int selected = modelIndex(currentModel, models);
         final AlertDialog selector = new AlertDialog.Builder(ctx)
-                .setTitle(tr("model_selector_title"))
+                .setTitle(provider.displayName + " · " + tr("model_selector_title"))
                 .setSingleChoiceItems(choices, selected, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
@@ -2714,7 +2714,7 @@ public final class LrclibFallback {
                                     @Override
                                     public void onValueChanged(String value) {
                                         if (value.trim().isEmpty()) {
-                                            Toast.makeText(ctx, tr("openrouter_config_required"),
+                                            Toast.makeText(ctx, tr("translation_config_required"),
                                                     Toast.LENGTH_SHORT).show();
                                         } else {
                                             listener.onModelSelected(value.trim());
@@ -2728,7 +2728,7 @@ public final class LrclibFallback {
         selector.show();
     }
 
-    private static int modelIndex(String model, List<OpenRouterModel> models) {
+    private static int modelIndex(String model, List<Model> models) {
         if (model != null) {
             for (int i = 0; i < models.size(); i++) {
                 if (models.get(i).id.equals(model)) return i;
@@ -2772,7 +2772,7 @@ public final class LrclibFallback {
     private static void autoTranslateIfEnabled(final Context ctx, final Object song) {
         try {
             if (ctx == null || song == null) return;
-            final OpenRouterSettings settings = readOpenRouterSettings(ctx);
+            final TranslationSettings settings = readTranslationSettings(ctx);
             if (!settings.autoTranslate || settings.apiKey.trim().isEmpty()
                     || settings.model.trim().isEmpty()
                     || settings.language.trim().isEmpty()) return;
@@ -2786,14 +2786,14 @@ public final class LrclibFallback {
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
-                    OpenRouterSettings current = readOpenRouterSettings(ctx);
+                    TranslationSettings current = readTranslationSettings(ctx);
                     if (!current.autoTranslate || current.apiKey.trim().isEmpty()
                             || current.model.trim().isEmpty()
                             || current.language.trim().isEmpty()) return;
                     SourceSnapshot latest = translationSourceFor(song);
                     if (latest == null || !latest.songId.equals(snapshot.songId)
                             || !sameSourceLines(latest.lines, snapshot.lines)) return;
-                    translateAndRender(ctx, song, latest, current.apiKey,
+                    translateAndRender(ctx, song, latest, current.provider, current.apiKey,
                             current.model, current.language, current.systemPrompt, false);
                 }
             });
@@ -2804,22 +2804,7 @@ public final class LrclibFallback {
 
     private static void translateAndRender(final Context ctx, final Object song,
                                            final SourceSnapshot snapshot,
-                                           final String apiKey, final String model,
-                                           final String language) {
-        translateAndRender(ctx, song, snapshot, apiKey, model, language, "", true);
-    }
-
-    private static void translateAndRender(final Context ctx, final Object song,
-                                           final SourceSnapshot snapshot,
-                                           final String apiKey, final String model,
-                                           final String language,
-                                           final String systemPrompt) {
-        translateAndRender(ctx, song, snapshot, apiKey, model, language,
-                systemPrompt, true);
-    }
-
-    private static void translateAndRender(final Context ctx, final Object song,
-                                           final SourceSnapshot snapshot,
+                                           final TranslationProvider provider,
                                            final String apiKey, final String model,
                                            final String language,
                                            final String systemPrompt,
@@ -2839,7 +2824,8 @@ public final class LrclibFallback {
         }
         final String cacheKey;
         try {
-            cacheKey = translationCacheKey(snapshot, model, language, systemPrompt);
+            cacheKey = translationCacheKey(snapshot, provider.cacheModelKey(model),
+                    language, systemPrompt);
         } catch (Exception e) {
             Toast.makeText(ctx, tr("translation_failed"), Toast.LENGTH_SHORT).show();
             return;
@@ -2852,7 +2838,7 @@ public final class LrclibFallback {
         try {
             if (interactive) {
                 progress = new ProgressDialog(ctx);
-                progress.setMessage(tr("translating"));
+                progress.setMessage(String.format(tr("translating"), provider.displayName));
                 progress.setCancelable(false);
                 progress.show();
             } else {
@@ -2873,12 +2859,14 @@ public final class LrclibFallback {
                 String failure = null;
                 if (translated == null) {
                     try {
-                        translated = requestOpenRouterTranslation(apiKey, model,
+                        String sessionId = provider == TranslationProvider.OPENCODE
+                                ? openCodeSessionId(ctx) : null;
+                        translated = requestTranslation(provider, apiKey, model, sessionId,
                                 language, systemPrompt, snapshot.lines);
                         writeTranslationCache(ctx, cacheKey, translated);
                     } catch (Throwable t) {
                         failure = t.getMessage();
-                        Log.d(TAG, "OpenRouter translation failed: " + t);
+                        Log.d(TAG, provider.displayName + " translation failed: " + t);
                     }
                 }
                 final List<String> result = translated;
@@ -2891,6 +2879,13 @@ public final class LrclibFallback {
                         } catch (Throwable ignored) {
                         }
                         try {
+                            // A response for a previous provider/model must not replace
+                            // the result requested after changing translation settings.
+                            TranslationSettings selected = readTranslationSettings(ctx);
+                            if (selected.provider != provider || !selected.model.equals(model)
+                                    || !selected.language.equals(language)
+                                    || !selected.systemPrompt.equals(systemPrompt)
+                                    || (!interactive && !selected.autoTranslate)) return;
                             if (error != null || result == null) {
                                 String message = tr("translation_failed");
                                 if (error != null && !error.trim().isEmpty()) {
@@ -2986,17 +2981,16 @@ public final class LrclibFallback {
         }
     }
 
-    private static List<String> requestOpenRouterTranslation(String apiKey,
-                                                              String model,
-                                                              String language,
-                                                              String systemPrompt,
-                                                              List<Line> source)
+    private static List<String> requestTranslation(TranslationProvider provider, String apiKey,
+                                                   String model, String sessionId, String language,
+                                                   String systemPrompt, List<Line> source)
             throws Exception {
         JSONArray inputLines = new JSONArray();
         for (Line line : source) inputLines.put(line.text == null ? "" : line.text);
         JSONObject request = new JSONObject();
         request.put("model", model);
-        request.put("temperature", 0.1);
+        if (provider == TranslationProvider.OPENROUTER) request.put("temperature", 0.1);
+        request.put("stream", false);
         String systemInstructions = "You are a lyrics localization engine. Read all supplied "
                 + "lines together as one song and use their context to resolve "
                 + "pronouns, idioms, references, tone, and ambiguity.";
@@ -3028,23 +3022,27 @@ public final class LrclibFallback {
 
         Exception lastError = null;
         // Prefer strict schema output, then relax to JSON mode for models or
-        // OpenRouter routes that do not support structured outputs.
+        // provider routes that do not support structured outputs.
         for (int outputMode = 2; outputMode >= 0; outputMode--) {
             HttpURLConnection connection = null;
             try {
                 JSONObject attempt = new JSONObject(request.toString());
                 if (outputMode > 0) {
-                    attempt.put("response_format", openRouterResponseFormat(outputMode));
+                    attempt.put("response_format", translationResponseFormat(outputMode));
                 }
-                connection = (HttpURLConnection) new URL(OPENROUTER_URL).openConnection();
+                connection = (HttpURLConnection) new URL(provider.completionsUrl).openConnection();
                 connection.setRequestMethod("POST");
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Authorization", "Bearer " + apiKey);
                 connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
                 connection.setRequestProperty("Accept", "application/json");
-                connection.setRequestProperty("HTTP-Referer",
-                        "https://github.com/0xgalal/anghami-patches");
-                connection.setRequestProperty("X-Title", "Anghami AI Lyrics Translation");
+                if (provider == TranslationProvider.OPENROUTER) {
+                    connection.setRequestProperty("HTTP-Referer",
+                            "https://github.com/0xgalal/anghami-patches");
+                    connection.setRequestProperty("X-Title", "Anghami AI Lyrics Translation");
+                } else {
+                    connection.setRequestProperty("x-opencode-session", sessionId);
+                }
                 connection.setConnectTimeout(HTTP_TIMEOUT_MS);
                 connection.setReadTimeout(TRANSLATION_TIMEOUT_MS);
                 java.io.OutputStream out = connection.getOutputStream();
@@ -3057,9 +3055,9 @@ public final class LrclibFallback {
                         ? connection.getInputStream() : connection.getErrorStream();
                 String body = readUtf8(stream);
                 if (status >= 200 && status < 300) {
-                    return parseOpenRouterTranslations(body, source);
+                    return parseTranslationResponse(body, source);
                 }
-                String detail = "HTTP " + status;
+                String detail = provider.displayName + " HTTP " + status;
                 try {
                     JSONObject error = new JSONObject(body).optJSONObject("error");
                     if (error != null) detail += ": " + error.optString("message", "");
@@ -3071,10 +3069,10 @@ public final class LrclibFallback {
                 if (connection != null) connection.disconnect();
             }
         }
-        throw lastError == null ? new Exception("OpenRouter request failed") : lastError;
+        throw lastError == null ? new Exception(provider.displayName + " request failed") : lastError;
     }
 
-    private static JSONObject openRouterResponseFormat(int mode) throws Exception {
+    private static JSONObject translationResponseFormat(int mode) throws Exception {
         if (mode == 1) return new JSONObject().put("type", "json_object");
 
         JSONObject stringSchema = new JSONObject()
@@ -3106,19 +3104,20 @@ public final class LrclibFallback {
         return text.toString();
     }
 
-    private static List<String> parseOpenRouterTranslations(String body, List<Line> source)
+    private static List<String> parseTranslationResponse(String body, List<Line> source)
             throws Exception {
         JSONObject root = new JSONObject(body);
         JSONArray choices = root.optJSONArray("choices");
         if (choices == null || choices.length() == 0) {
-            throw new Exception("OpenRouter returned no choices");
+            throw new Exception("Translation provider returned no choices");
         }
-        JSONObject message = choices.optJSONObject(0).optJSONObject("message");
-        if (message == null) throw new Exception("OpenRouter returned an empty response");
-        String finishReason = choices.optJSONObject(0).optString("finish_reason", "");
+        JSONObject choice = choices.optJSONObject(0);
+        JSONObject message = choice == null ? null : choice.optJSONObject("message");
+        if (message == null) throw new Exception("Translation provider returned an empty response");
+        String finishReason = choice.optString("finish_reason", "");
         if ("length".equalsIgnoreCase(finishReason)
                 || "max_tokens".equalsIgnoreCase(finishReason)) {
-            throw new Exception("OpenRouter response reached the model's output limit");
+            throw new Exception("Translation response reached the model's output limit");
         }
         Object contentValue = message.opt("content");
         String content;
@@ -3133,7 +3132,7 @@ public final class LrclibFallback {
             }
             content = combined.toString().trim();
         } else {
-            throw new Exception("OpenRouter returned unsupported content");
+            throw new Exception("Translation provider returned unsupported content");
         }
         if (content.startsWith("```")) {
             content = content.replaceFirst("^```(?:json)?\\s*", "")
@@ -3212,7 +3211,7 @@ public final class LrclibFallback {
             } catch (Exception ignored) {
             }
             invokeRender(callback, song, displayLines, response);
-            Log.d(TAG, "OpenRouter dual-line translation rendered");
+            Log.d(TAG, "Dual-line translation rendered");
         } catch (Throwable t) {
             Log.d(TAG, "dual-line render failed: " + t);
         }

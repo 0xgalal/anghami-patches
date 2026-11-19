@@ -251,15 +251,15 @@ val lyricsSettingsPatch = bytecodePatch(
 }
 
 /**
- * Adds native-lyrics capture and automatic translation for OpenRouter.
+ * Adds native-lyrics capture and automatic translation for OpenRouter and OpenCode.
  * Capture at the renderer covers API and StoredLyrics/cache responses;
  * truncated/empty responses are ignored so teasers are never translated.
  * Long-pressing the player's Lyrics toggle opens the auto-translation dialog.
  */
 @Suppress("unused")
 val lyricsOpenRouterTranslationPatch = bytecodePatch(
-    name = "AI lyrics translation · OpenRouter",
-    description = "Adds optional automatic OpenRouter lyric translation, shown beneath each original line. Long-press the player Lyrics button to configure it.",
+    name = "AI lyrics translation · OpenRouter / OpenCode",
+    description = "Adds optional automatic lyric translation via OpenRouter or OpenCode, shown beneath each original line. Long-press the player Lyrics button to choose a provider and configure it.",
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
