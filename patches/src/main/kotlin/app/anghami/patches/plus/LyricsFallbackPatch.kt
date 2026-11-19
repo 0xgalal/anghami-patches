@@ -242,19 +242,33 @@ val lyricsLongPressPatch = bytecodePatch(
 
 /**
  * Adds native-lyrics capture for the OpenRouter action in the lyrics options.
- * Full server lyrics are captured only; truncated/empty responses are ignored
- * so the action cannot translate a teaser or the fallback guide.
+ * Capture at the renderer covers both API and StoredLyrics/cache responses;
+ * truncated/empty responses are ignored so teasers are never translated.
  */
 @Suppress("unused")
 val lyricsOpenRouterTranslationPatch = bytecodePatch(
     name = "AI lyrics translation · OpenRouter",
-    description = "Adds opt-in OpenRouter translation beneath original lyrics, preserving each line's timestamp. Configure API key, model, and target language from the lyrics options.",
+    description = "Translates the full lyric with context, validates line alignment, and displays each translation beneath its original at the source timestamp. Configure OpenRouter in the lyrics options.",
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     dependsOn(lyricsLongPressPatch)
 
     execute {
+        // Capture at the render choke point so lyrics loaded from Anghami's
+        // StoredLyrics cache also have a song-bound callback for the dialog.
+        // The helper ignores truncated/empty payloads; substituteCached
+        // captures its own replacement after rewriting a cached fallback.
+        LyricsSuccessFingerprint.method.addInstructions(
+            0,
+            """
+                invoke-static {p0, p1, p3}, $FALLBACK_HELPER->rememberNativeLyrics(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+            """
+        )
+
+        // Also capture the original API callback after maybeFetch returns.
+        // This preserves native lines even when the fallback path returns
+        // early for a complete server response.
         val method = LyricsApiOnNextFingerprint.method
         val captureAnchor = method.implementation!!.instructions.mapIndexedNotNull { index, ins ->
             if (ins.opcode == Opcode.INVOKE_STATIC && ins is Instruction35c &&

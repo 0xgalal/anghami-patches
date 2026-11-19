@@ -9,6 +9,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -123,7 +125,9 @@ public final class LrclibFallback {
     public static void rememberNativeLyrics(Object songObj, Object responseObj,
                                             Object callbackObj) {
         try {
-            if (songObj == null || responseObj == null || callbackObj == null) return;
+            if (callbackObj == null) return;
+            hideUnlockLyricsButton(callbackObj);
+            if (songObj == null || responseObj == null) return;
             if (!isFullNativeResponse(responseObj)) return;
             SongInfo song = readSong(songObj);
             if (song == null) return;
@@ -151,6 +155,66 @@ public final class LrclibFallback {
         } catch (Throwable t) {
             Log.d(TAG, "rememberNativeLyrics failed: " + t);
         }
+    }
+
+    /**
+     * Hides the dead "Unlock full lyrics" teaser control from the current
+     * lyrics view. Runs after the current render frame so native binding
+     * cannot immediately make the button visible again.
+     */
+    private static void hideUnlockLyricsButton(Object callbackObj) {
+        if (!(callbackObj instanceof View)) return;
+        final View root = (View) callbackObj;
+        final Runnable hide = new Runnable() {
+            @Override
+            public void run() {
+                hideUnlockLyricsInTree(root, root);
+            }
+        };
+        Handler main = new Handler(Looper.getMainLooper());
+        main.post(hide);
+        main.postDelayed(hide, 250);
+    }
+
+    private static void hideUnlockLyricsInTree(View view, View root) {
+        if (view.getVisibility() == View.GONE) return;
+        boolean matches = isUnlockLyricsLabel(view.getContentDescription());
+        if (view instanceof TextView) {
+            matches = matches || isUnlockLyricsLabel(((TextView) view).getText());
+        }
+        if (matches) {
+            View target = view;
+            ViewParent parent = view.getParent();
+            for (int depth = 0; depth < 3 && parent instanceof View; depth++) {
+                View candidate = (View) parent;
+                if (candidate == root) break;
+                if (candidate.isClickable() || candidate.isFocusable()) {
+                    target = candidate;
+                    break;
+                }
+                parent = candidate.getParent();
+            }
+            target.setEnabled(false);
+            target.setClickable(false);
+            target.setVisibility(View.GONE);
+            Log.d(TAG, "hid Unlock full lyrics button");
+            return;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = group.getChildCount() - 1; i >= 0; i--) {
+                hideUnlockLyricsInTree(group.getChildAt(i), root);
+            }
+        }
+    }
+
+    private static boolean isUnlockLyricsLabel(CharSequence label) {
+        if (label == null || label.length() == 0) return false;
+        String text = normalize(label.toString(), false);
+        return (text.contains("unlock") && text.contains("lyric"))
+                || (text.contains("debloquer") && text.contains("parole"))
+                || (text.contains("ouvrir") && text.contains("parole"))
+                || (text.contains("فتح") && text.contains("كلمات"));
     }
 
     /**
@@ -2020,57 +2084,97 @@ public final class LrclibFallback {
         for (Line line : source) inputLines.put(line.text == null ? "" : line.text);
         JSONObject request = new JSONObject();
         request.put("model", model);
-        request.put("temperature", 0.2);
+        request.put("temperature", 0.1);
         JSONArray messages = new JSONArray();
         messages.put(new JSONObject()
                 .put("role", "system")
-                .put("content", "You translate song lyrics accurately and naturally. "
-                        + "Keep each input line separate, preserve its meaning and tone, "
-                        + "and do not add explanations."));
+                .put("content", "You are a lyrics localization engine. Read all supplied "
+                        + "lines together as one song and use their context to resolve "
+                        + "pronouns, idioms, references, tone, and ambiguity. Return only "
+                        + "JSON matching the requested schema. Do not explain, think aloud, "
+                        + "use markdown, merge lines, split lines, or add notes. Return "
+                        + "exactly " + source.size() + " strings in `translations`, "
+                        + "preserving input order. Empty input lines must stay empty. Make "
+                        + "translations natural for music listening while staying faithful "
+                        + "to meaning, tense, names, punctuation, and repeated hooks. "
+                        + "Preserve text already in the target language verbatim, including "
+                        + "target-language parts of mixed lines."));
         messages.put(new JSONObject()
                 .put("role", "user")
-                .put("content", "Translate every line into " + language + ". Return only "
-                        + "a JSON object with a string array named translations. The array "
-                        + "must have exactly " + source.size() + " entries in the same order. "
-                        + "Do not merge, split, omit, or add lines. Keep an empty input line "
-                        + "empty.\nInput lines:\n" + inputLines.toString()));
+                .put("content", "Translate the `lines` JSON array into " + language
+                        + " for synced song lyrics. Interpret the full lyric as one work "
+                        + "before translating, but return one translation per source line. "
+                        + "Keep line order, repeated hooks, names, punctuation, and empty "
+                        + "lines. Return exactly " + source.size() + " output lines in a "
+                        + "JSON object with a string array named `translations`.\n\n"
+                        + "{\"lines\":" + inputLines.toString() + "}"));
         request.put("messages", messages);
 
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL(OPENROUTER_URL).openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Authorization", "Bearer " + apiKey);
-            connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("HTTP-Referer",
-                    "https://github.com/mohamedamrnady/anghami-patches");
-            connection.setRequestProperty("X-Title", "Anghami AI Lyrics Translation");
-            connection.setConnectTimeout(HTTP_TIMEOUT_MS);
-            connection.setReadTimeout(TRANSLATION_TIMEOUT_MS);
-            java.io.OutputStream out = connection.getOutputStream();
-            out.write(request.toString().getBytes("UTF-8"));
-            out.flush();
-            out.close();
+        Exception lastError = null;
+        // Prefer strict schema output, then relax to JSON mode for models or
+        // OpenRouter routes that do not support structured outputs.
+        for (int outputMode = 2; outputMode >= 0; outputMode--) {
+            HttpURLConnection connection = null;
+            try {
+                JSONObject attempt = new JSONObject(request.toString());
+                if (outputMode > 0) {
+                    attempt.put("response_format", openRouterResponseFormat(outputMode));
+                }
+                connection = (HttpURLConnection) new URL(OPENROUTER_URL).openConnection();
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+                connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("HTTP-Referer",
+                        "https://github.com/0xgalal/anghami-patches");
+                connection.setRequestProperty("X-Title", "Anghami AI Lyrics Translation");
+                connection.setConnectTimeout(HTTP_TIMEOUT_MS);
+                connection.setReadTimeout(TRANSLATION_TIMEOUT_MS);
+                java.io.OutputStream out = connection.getOutputStream();
+                out.write(attempt.toString().getBytes("UTF-8"));
+                out.flush();
+                out.close();
 
-            int status = connection.getResponseCode();
-            InputStream stream = status >= 200 && status < 300
-                    ? connection.getInputStream() : connection.getErrorStream();
-            String body = readUtf8(stream);
-            if (status < 200 || status >= 300) {
+                int status = connection.getResponseCode();
+                InputStream stream = status >= 200 && status < 300
+                        ? connection.getInputStream() : connection.getErrorStream();
+                String body = readUtf8(stream);
+                if (status >= 200 && status < 300) {
+                    return parseOpenRouterTranslations(body, source);
+                }
                 String detail = "HTTP " + status;
                 try {
                     JSONObject error = new JSONObject(body).optJSONObject("error");
                     if (error != null) detail += ": " + error.optString("message", "");
                 } catch (Exception ignored) {
                 }
-                throw new Exception(detail);
+                lastError = new Exception(detail);
+                if (status != 400 && status != 422) throw lastError;
+            } finally {
+                if (connection != null) connection.disconnect();
             }
-            return parseOpenRouterTranslations(body, source.size());
-        } finally {
-            if (connection != null) connection.disconnect();
         }
+        throw lastError == null ? new Exception("OpenRouter request failed") : lastError;
+    }
+
+    private static JSONObject openRouterResponseFormat(int mode) throws Exception {
+        if (mode == 1) return new JSONObject().put("type", "json_object");
+
+        JSONObject stringSchema = new JSONObject()
+                .put("type", "array")
+                .put("items", new JSONObject().put("type", "string"));
+        JSONObject schema = new JSONObject()
+                .put("type", "object")
+                .put("properties", new JSONObject().put("translations", stringSchema))
+                .put("required", new JSONArray().put("translations"))
+                .put("additionalProperties", false);
+        return new JSONObject()
+                .put("type", "json_schema")
+                .put("json_schema", new JSONObject()
+                        .put("name", "lyrics_translation")
+                        .put("strict", true)
+                        .put("schema", schema));
     }
 
     private static String readUtf8(InputStream input) throws Exception {
@@ -2086,7 +2190,7 @@ public final class LrclibFallback {
         return text.toString();
     }
 
-    private static List<String> parseOpenRouterTranslations(String body, int expected)
+    private static List<String> parseOpenRouterTranslations(String body, List<Line> source)
             throws Exception {
         JSONObject root = new JSONObject(body);
         JSONArray choices = root.optJSONArray("choices");
@@ -2095,6 +2199,11 @@ public final class LrclibFallback {
         }
         JSONObject message = choices.optJSONObject(0).optJSONObject("message");
         if (message == null) throw new Exception("OpenRouter returned an empty response");
+        String finishReason = choices.optJSONObject(0).optString("finish_reason", "");
+        if ("length".equalsIgnoreCase(finishReason)
+                || "max_tokens".equalsIgnoreCase(finishReason)) {
+            throw new Exception("OpenRouter response reached the model's output limit");
+        }
         Object contentValue = message.opt("content");
         String content;
         if (contentValue instanceof String) {
@@ -2118,9 +2227,11 @@ public final class LrclibFallback {
         if (content.startsWith("[")) {
             translated = new JSONArray(content);
         } else {
-            translated = new JSONObject(content).optJSONArray("translations");
+            JSONObject result = new JSONObject(content);
+            translated = result.optJSONArray("translations");
+            if (translated == null) translated = result.optJSONArray("lines");
         }
-        if (translated == null || translated.length() != expected) {
+        if (translated == null || translated.length() != source.size()) {
             throw new Exception("Model returned a different number of lines");
         }
         List<String> out = new ArrayList<String>();
@@ -2129,7 +2240,14 @@ public final class LrclibFallback {
             if (!(value instanceof String)) {
                 throw new Exception("Model returned a non-text lyric line");
             }
-            out.add((String) value);
+            String text = (String) value;
+            boolean sourceBlank = source.get(i).text == null
+                    || source.get(i).text.trim().isEmpty();
+            if (sourceBlank != text.trim().isEmpty()
+                    || text.indexOf('\n') >= 0 || text.indexOf('\r') >= 0) {
+                throw new Exception("Model returned misaligned lyric lines");
+            }
+            out.add(sourceBlank ? "" : text);
         }
         return out;
     }
