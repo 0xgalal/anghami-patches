@@ -1199,6 +1199,11 @@ public final class LrclibFallback {
             if (fr) return "Utilisez une clé API OpenCode Console et un modèle payant. Les modèles gratuits sont réservés à l’application OpenCode.";
             return "Use an OpenCode Console API key and a paid model. Free chat models are available only inside the OpenCode app.";
         }
+        if ("xkiro_note".equals(key)) {
+            if (ar) return "استخدم مفتاح xKiro API. للنماذج المجانية حد يومي للرموز؛ والمدفوعة تتطلب خطة أو رصيداً مؤهلاً، والمميزة خطة مؤهلة أو إيداعاً فعلياً.";
+            if (fr) return "Utilisez une clé API xKiro. Les modèles gratuits ont un quota quotidien de jetons ; les modèles payants nécessitent un forfait ou un solde admissible, et les modèles premium un forfait admissible ou un dépôt réel.";
+            return "Use an xKiro API key. Free models have a daily token allowance; paid models need an eligible plan or balance, and premium models need an eligible plan or real deposit.";
+        }
         if ("model_label".equals(key)) {
             if (ar) return "النموذج";
             if (fr) return "Modèle";
@@ -2243,6 +2248,16 @@ public final class LrclibFallback {
         editor.apply();
     }
 
+    private static boolean hasProviderNote(TranslationProvider provider) {
+        return provider == TranslationProvider.OPENCODE || provider == TranslationProvider.XKIRO;
+    }
+
+    private static String translationProviderNote(TranslationProvider provider) {
+        if (provider == TranslationProvider.OPENCODE) return tr("opencode_note");
+        if (provider == TranslationProvider.XKIRO) return tr("xkiro_note");
+        return "";
+    }
+
     private static String openCodeSessionId(Context ctx) {
         synchronized (LrclibFallback.class) {
             SharedPreferences prefs = translationPrefs(ctx);
@@ -2282,12 +2297,11 @@ public final class LrclibFallback {
         final String[] systemPrompt = {settings.systemPrompt};
         final TextView[] credentialSummaries = new TextView[2];
         final TextView providerNote = new TextView(ctx);
-        providerNote.setText(tr("opencode_note"));
+        providerNote.setText(translationProviderNote(provider[0]));
         providerNote.setTextColor(Color.rgb(166, 172, 181));
         providerNote.setTextSize(13);
         providerNote.setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 8));
-        providerNote.setVisibility(provider[0] == TranslationProvider.OPENCODE
-                ? View.VISIBLE : View.GONE);
+        providerNote.setVisibility(hasProviderNote(provider[0]) ? View.VISIBLE : View.GONE);
 
         LinearLayout rows = new LinearLayout(ctx);
         rows.setOrientation(LinearLayout.VERTICAL);
@@ -2336,8 +2350,10 @@ public final class LrclibFallback {
                                                         provider[0].displayName);
                                                 credentialSummaries[0].setText(maskedApiKey(draft.apiKey));
                                                 credentialSummaries[1].setText(draft.model);
+                                                providerNote.setText(
+                                                        translationProviderNote(provider[0]));
                                                 providerNote.setVisibility(
-                                                        provider[0] == TranslationProvider.OPENCODE
+                                                        hasProviderNote(provider[0])
                                                                 ? View.VISIBLE : View.GONE);
                                                 dialog.dismiss();
                                             }
@@ -3023,7 +3039,8 @@ public final class LrclibFallback {
         Exception lastError = null;
         // Prefer strict schema output, then relax to JSON mode for models or
         // provider routes that do not support structured outputs.
-        for (int outputMode = 2; outputMode >= 0; outputMode--) {
+        int firstOutputMode = provider == TranslationProvider.XKIRO ? 1 : 2;
+        for (int outputMode = firstOutputMode; outputMode >= 0; outputMode--) {
             HttpURLConnection connection = null;
             try {
                 JSONObject attempt = new JSONObject(request.toString());
@@ -3040,7 +3057,7 @@ public final class LrclibFallback {
                     connection.setRequestProperty("HTTP-Referer",
                             "https://github.com/0xgalal/anghami-patches");
                     connection.setRequestProperty("X-Title", "Anghami AI Lyrics Translation");
-                } else {
+                } else if (provider == TranslationProvider.OPENCODE) {
                     connection.setRequestProperty("x-opencode-session", sessionId);
                 }
                 connection.setConnectTimeout(HTTP_TIMEOUT_MS);
