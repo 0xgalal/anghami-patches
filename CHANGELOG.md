@@ -1,3 +1,9 @@
+## [1.16.0](https://github.com/0xgalal/anghami-patches/compare/v1.15.0...v1.16.0) (2026-11-20)
+
+### ✨ New Features
+
+* full-app day/night themes, THEME label, stable lyric sources, 10s AI timeout ([fdf3866](https://github.com/0xgalal/anghami-patches/commit/fdf38662f7d8f5aaebbc06ca17d29f6b8e3878b1))
+
 ## [1.15.0](https://github.com/0xgalal/anghami-patches/compare/v1.14.0...v1.15.0) (2026-11-20)
 
 ### 🐛 Bug Fixes

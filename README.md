@@ -22,9 +22,9 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.15.0](https://github.com/0xgalal/anghami-patches/releases/tag/v1.15.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;19 patches total
+> **[v1.16.0](https://github.com/0xgalal/anghami-patches/releases/tag/v1.16.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;20 patches total
 <details open>
-<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;19 patches</summary>
+<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;20 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -48,6 +48,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 | [Player theme background](#player-theme-background) | Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'. |  |
 | [Remove popup promos](#remove-popup-promos) | No-ops the in-house popup funnel, the fullscreen startup dialog, and the flyer ad callback. Google SDK ads untouched. |  |
 | [Spoof stock app signature](#spoof-stock-app-signature) | Forces SignatureUtils.getAppSignature to hash with the stock cert prefix (he9B...kw=), so X-ANGH-APP-RGSIG matches a stock install. Salt/body hashing unchanged. |  |
+| [Theme row title](#theme-row-title) | Retitles the runtime Theme settings row to 'THEME' by repurposing the unused dummy_tag_1 string resource. |  |
 | [Theme section in Settings](#theme-section-in-settings) | Adds a Theme section to Settings with five presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz) for the app chrome and player. |  |
 | [Unforce shuffle](#unforce-shuffle) | Forces server shuffleOn=false, blocks client-reported skip-limit similar-song fallback, disables the pick-a-song radio redirect, and enables shuffle buttons without breaking manual or header Shuffle. |  |
 | [Unlock downloads](#unlock-downloads) | No-ops download limit asserts, forces limited-plan=false and large offline caps (999999). Local gates only; the server still authorizes files. |  |
