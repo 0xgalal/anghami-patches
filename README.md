@@ -78,7 +78,11 @@ synced lyrics in this order and stops at the first match:
 5. **Paxsenix** — Apple Music catalogue search plus track lyrics.
 
 Each source is optional: a timeout or error just moves on to the next one.
-Results are cached per song, so a miss is only paid once.
+Results are cached per song, and a cached "no lyrics found" is re-checked in
+the background so an update from any source appears without reopening the
+song. The player's **Lyrics options** dialog has a **Lyrics sources** button
+that lets you pick a single source manually; the result is shown immediately
+and sent for translation when automatic translation is enabled.
 
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 

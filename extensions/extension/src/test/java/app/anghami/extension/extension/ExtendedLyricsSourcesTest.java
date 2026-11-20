@@ -23,6 +23,17 @@ public class ExtendedLyricsSourcesTest {
     }
 
     @Test
+    public void dialogOffersEverySourceInOrder() {
+        assertArrayEquals(new String[]{"lrclib", "kugou", "lyricsplus",
+                        "betterlyrics", "paxsenix"},
+                LrclibFallback.LYRIC_SOURCE_IDS);
+        assertEquals("LRCLIB", LrclibFallback.sourceLabel("lrclib"));
+        assertEquals("LyricsPlus", LrclibFallback.sourceLabel("lyricsplus"));
+        assertEquals("Better Lyrics", LrclibFallback.sourceLabel("betterlyrics"));
+        assertEquals("Paxsenix", LrclibFallback.sourceLabel("paxsenix"));
+    }
+
+    @Test
     public void candidateScoringPrefersMatchingMetadata() {
         int exact = LrclibFallback.candidateScore(
                 "Bohemian Rhapsody", "Queen", 354, "Bohemian Rhapsody", "Queen", 354);
