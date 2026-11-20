@@ -1,3 +1,9 @@
+## [1.14.0](https://github.com/0xgalal/anghami-patches/compare/v1.13.7...v1.14.0) (2026-11-20)
+
+### ✨ New Features
+
+* add Theme section with 5 presets and manual AI translate button ([86a020f](https://github.com/0xgalal/anghami-patches/commit/86a020f7f548a746b035af48609ca8b5535fc81f))
+
 ## [1.13.7](https://github.com/0xgalal/anghami-patches/compare/v1.13.6...v1.13.7) (2026-11-20)
 
 ### 🐛 Bug Fixes
