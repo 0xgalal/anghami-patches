@@ -1,5 +1,7 @@
 package app.anghami.extension.extension;
 
+import android.content.SharedPreferences;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Before;
@@ -10,8 +12,10 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLStreamHandler;
@@ -19,7 +23,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.*;
 
@@ -462,6 +468,131 @@ public class TranslationRequestTest {
         });
         assertTrue(error.getMessage().contains("Cloudflare"));
         assertFalse(TranslationProvider.CLOUDFLARE.fallbackModels().isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void cloudflareLongSongIssuesMultipleBatchesAndKeepsAllLinesInOrder() throws Exception {
+        List<?> source = sourceWithLines(60);
+        List<List<LrclibFallback.Line>> batches = LrclibFallback.translationBatchesFor(
+                TranslationProvider.CLOUDFLARE, TranslationProvider.CLOUDFLARE.defaultModel,
+                (List<LrclibFallback.Line>) source);
+        assertTrue("expected several Cloudflare batches, got " + batches.size(),
+                batches.size() > 1);
+
+        // Queue one well-formed Cloudflare response per batch. "T<index>" is
+        // the expected translation of source line <index>, so order is checked.
+        int offset = 0;
+        for (List<LrclibFallback.Line> batch : batches) {
+            String[] translations = new String[batch.size()];
+            for (int j = 0; j < batch.size(); j++) translations[j] = "T" + (offset + j);
+            responses.add(new Response(200, cloudflareSuccess(translations)));
+            offset += batch.size();
+        }
+        assertEquals(60, offset);
+
+        SharedPreferences p = emptyPrefs();
+        final Method withAccount = requestWithAccount;
+        LrclibFallback.BatchTranslator translator = (batch, prompt) -> {
+            try {
+                return (List<String>) withAccount.invoke(null, TranslationProvider.CLOUDFLARE,
+                        "cf-token", "acct123", TranslationProvider.CLOUDFLARE.defaultModel,
+                        null, "French", prompt, batch);
+            } catch (InvocationTargetException e) {
+                if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
+                throw e;
+            }
+        };
+        LrclibFallback.BatchOutcome outcome = LrclibFallback.translateBatches(p,
+                TranslationProvider.CLOUDFLARE, "acct123",
+                TranslationProvider.CLOUDFLARE.defaultModel, "French", false, "",
+                batches, translator);
+
+        assertEquals("one request per Cloudflare batch", batches.size(), connections.size());
+        assertEquals(0, outcome.failedBatches);
+        assertEquals(60, outcome.lines.size());
+        for (int i = 0; i < 60; i++) assertEquals("line " + i, "T" + i, outcome.lines.get(i));
+        for (Connection connection : connections) {
+            assertEquals("POST", connection.getRequestMethod());
+            assertTrue(connection.getURL().toString().contains("/ai/run/"));
+            JSONObject body = connection.requestBody();
+            assertFalse("Cloudflare must not send a body model field", body.has("model"));
+            assertFalse("Cloudflare must not use response_format", body.has("response_format"));
+            assertTrue(body.getJSONArray("messages").getJSONObject(1).getString("content")
+                    .contains("string array named `lines`"));
+            assertTrue(connection.disconnected);
+        }
+
+        // Second run: all batches are cached, so no further HTTP calls happen.
+        connections.clear();
+        LrclibFallback.BatchTranslator never = (batch, prompt) -> {
+            throw new Exception("all batches should be cached");
+        };
+        LrclibFallback.BatchOutcome cached = LrclibFallback.translateBatches(p,
+                TranslationProvider.CLOUDFLARE, "acct123",
+                TranslationProvider.CLOUDFLARE.defaultModel, "French", false, "",
+                batches, never);
+        assertEquals(0, connections.size());
+        assertEquals(0, cached.failedBatches);
+        assertEquals(batches.size(), cached.cachedBatches);
+        assertEquals(60, cached.lines.size());
+        for (int i = 0; i < 60; i++) assertEquals("T" + i, cached.lines.get(i));
+    }
+
+    @Test
+    public void nonCloudflareLongSongStaysExactlyOneRequest() throws Exception {
+        List<?> source = sourceWithLines(60);
+        for (TranslationProvider provider : TranslationProvider.values()) {
+            if (provider == TranslationProvider.CLOUDFLARE) continue;
+            List<List<LrclibFallback.Line>> plan = LrclibFallback.translationBatchesFor(
+                    provider, provider.defaultModel, (List<LrclibFallback.Line>) source);
+            assertEquals(provider + " planned more than one batch", 1, plan.size());
+            assertEquals(60, plan.get(0).size());
+
+            String[] translations = new String[60];
+            for (int i = 0; i < 60; i++) translations[i] = "T" + i;
+            responses.add(new Response(200, success(translations)));
+            @SuppressWarnings("unchecked")
+            List<String> result = (List<String>) request.invoke(null, provider,
+                    "test-key", provider.defaultModel,
+                    provider == TranslationProvider.OPENCODE ? "ses_test-session" : null,
+                    "French", "", source);
+            assertEquals(provider + " issued more than one request", 1, connections.size());
+            assertEquals(60, result.size());
+            for (int i = 0; i < 60; i++) assertEquals("T" + i, result.get(i));
+            JSONObject body = connections.get(0).requestBody();
+            assertEquals(provider.defaultModel, body.getString("model"));
+            assertTrue(body.getJSONArray("messages").getJSONObject(0).getString("content")
+                    .contains("EXACTLY 60 items"));
+            connections.clear();
+        }
+    }
+
+    /** Minimal in-memory SharedPreferences for per-batch cache assertions. */
+    private static SharedPreferences emptyPrefs() {
+        final Map<String, String> store = new HashMap<String, String>();
+        return (SharedPreferences) Proxy.newProxyInstance(
+                TranslationRequestTest.class.getClassLoader(),
+                new Class<?>[]{SharedPreferences.class, SharedPreferences.Editor.class},
+                new InvocationHandler() {
+                    @Override
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        String name = method.getName();
+                        if ("getString".equals(name)) return store.get((String) args[0]);
+                        if ("putString".equals(name)) {
+                            store.put((String) args[0], (String) args[1]);
+                            return proxy;
+                        }
+                        if ("edit".equals(name) || "remove".equals(name)
+                                || "clear".equals(name)) return proxy;
+                        if ("apply".equals(name)) return null;
+                        if ("commit".equals(name)) return Boolean.TRUE;
+                        if ("equals".equals(name)) return proxy == args[0];
+                        if ("hashCode".equals(name)) return System.identityHashCode(proxy);
+                        if ("toString".equals(name)) return "fake translation prefs";
+                        return null;
+                    }
+                });
     }
 
     private static List<?> translateCloudflare(String key, String accountId) throws Exception {
