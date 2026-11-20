@@ -1,3 +1,9 @@
+## [1.12.0](https://github.com/0xgalal/anghami-patches/compare/v1.11.2...v1.12.0) (2026-11-20)
+
+### ✨ New Features
+
+* add source picker and keep searching when lyrics are missing ([d36508e](https://github.com/0xgalal/anghami-patches/commit/d36508e6b8ad364a02aff88579b659479fe86622))
+
 ## [1.11.2](https://github.com/0xgalal/anghami-patches/compare/v1.11.1...v1.11.2) (2026-11-20)
 
 ### 🐛 Bug Fixes

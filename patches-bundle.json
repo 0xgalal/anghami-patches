@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T07:35:54",
-  "description": "## [1.11.2](https://github.com/0xgalal/anghami-patches/compare/v1.11.1...v1.11.2) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* render lyrics immediately with auto-translate enabled ([461cb54](https://github.com/0xgalal/anghami-patches/commit/461cb541137ba2b1ac781cbd9402f08f02f8831a))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.11.2/patches-1.11.2.mpp",
+  "created_at": "2026-11-20T07:59:44",
+  "description": "## [1.12.0](https://github.com/0xgalal/anghami-patches/compare/v1.11.2...v1.12.0) (2026-11-20)\n\n### ✨ New Features\n\n* add source picker and keep searching when lyrics are missing ([d36508e](https://github.com/0xgalal/anghami-patches/commit/d36508e6b8ad364a02aff88579b659479fe86622))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.12.0/patches-1.12.0.mpp",
   "signature_download_url": "",
-  "version": "1.11.2"
+  "version": "1.12.0"
 }
