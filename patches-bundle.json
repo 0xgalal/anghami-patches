@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T15:23:02",
-  "description": "## [1.17.2](https://github.com/0xgalal/anghami-patches/compare/v1.17.1...v1.17.2) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* restore v1.3.0 patch baseline and trigger release ([67bda02](https://github.com/0xgalal/anghami-patches/commit/67bda02b93a9c6fd4a4573c5aedd669ce91f5511))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.2/patches-1.17.2.mpp",
+  "created_at": "2026-11-20T16:21:41",
+  "description": "## [1.17.3](https://github.com/0xgalal/anghami-patches/compare/v1.17.2...v1.17.3) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* translate full Cloudflare lyrics and add Translate now button ([e18a309](https://github.com/0xgalal/anghami-patches/commit/e18a309662c457ccb9914803f98f57501787d3d0))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.3/patches-1.17.3.mpp",
   "signature_download_url": "",
-  "version": "1.17.2"
+  "version": "1.17.3"
 }
