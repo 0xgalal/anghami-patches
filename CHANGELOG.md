@@ -1,3 +1,9 @@
+## [1.12.1](https://github.com/0xgalal/anghami-patches/compare/v1.12.0...v1.12.1) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* dismiss options dialog and use provider checklist ([43222c4](https://github.com/0xgalal/anghami-patches/commit/43222c4260caefe5b765e960ab7f011bb2990541))
+
 ## [1.12.0](https://github.com/0xgalal/anghami-patches/compare/v1.11.2...v1.12.0) (2026-11-20)
 
 ### ✨ New Features
