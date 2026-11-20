@@ -13,6 +13,10 @@ import app.anghami.patches.shared.Constants.COMPATIBILITY_ANGHAMI_8_0_28
      * - PlayQueue.getDisableSkipLimit / getDisableQueueRestrictions /
      *   getDisablePlayerRestrictions -> true
  * - ProtoAccount.getEnablePlayerRestrictions -> false
+ * - MessagesEvent.postSkipLimitReached() -> no-op (blocks the 0x29d event at
+ *   its source, so none of its three subscribers run)
+ * - Base Activity showSkipLimitsReached() -> no-op (defense in depth for the
+ *   skip-limit upsell/dialog)
  *
  * Local gates only; stream authorization stays server-side.
  */
@@ -74,5 +78,10 @@ val unlockPlaybackLimitsPatch = bytecodePatch(
                 return v0
             """
         )
+        // Block the skip-limit event at its source so no subscriber reacts.
+        PostSkipLimitReachedFingerprint.method.addInstructions(0, "return-void")
+        // No-op the skip-limit upsell/dialog method as defense in depth. Void
+        // return, no registers used, safe regardless of register count.
+        ShowSkipLimitsReachedFingerprint.method.addInstructions(0, "return-void")
     }
 }
