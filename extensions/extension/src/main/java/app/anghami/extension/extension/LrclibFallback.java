@@ -2593,59 +2593,84 @@ public final class LrclibFallback {
                 final String a = artistEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
                 final String t = titleEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
                 final Context c = v.getContext();
+                // Close the options dialog first, otherwise it stays on top
+                // of the lyrics view and hides the result.
+                dialog.dismiss();
                 String[] labels = new String[LYRIC_SOURCE_IDS.length];
+                final boolean[] checked = new boolean[LYRIC_SOURCE_IDS.length];
                 for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
                     labels[i] = sourceLabel(LYRIC_SOURCE_IDS[i]);
+                    checked[i] = true;
                 }
                 new AlertDialog.Builder(c)
                         .setTitle(tr("lyrics_sources"))
-                        .setItems(labels, new android.content.DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(android.content.DialogInterface d, int which) {
-                                final String sourceId = LYRIC_SOURCE_IDS[which];
-                                d.dismiss();
-                                Toast.makeText(c, tr("searching"), Toast.LENGTH_SHORT).show();
-                                new Thread(new Runnable() {
+                        .setMultiChoiceItems(labels, checked, null)
+                        .setPositiveButton(tr("search"),
+                                new android.content.DialogInterface.OnClickListener() {
                                     @Override
-                                    public void run() {
-                                        SongInfo s = new SongInfo();
-                                        try {
-                                            s.id = String.valueOf(getFieldUp(song, "id"));
-                                        } catch (Exception ignored) {
+                                    public void onClick(android.content.DialogInterface d, int which) {
+                                        final List<String> selected = new ArrayList<String>();
+                                        for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
+                                            if (checked[i]) selected.add(LYRIC_SOURCE_IDS[i]);
                                         }
-                                        s.artist = a;
-                                        s.title = t;
-                                        s.duration = info.duration;
-                                        s.hasDuration = info.hasDuration;
-                                        final Result r = fromSource(s, sourceId);
-                                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                        if (selected.isEmpty()) {
+                                            Toast.makeText(c, tr("translation_config_required"),
+                                                    Toast.LENGTH_SHORT).show();
+                                            return;
+                                        }
+                                        Toast.makeText(c, tr("searching"), Toast.LENGTH_SHORT).show();
+                                        new Thread(new Runnable() {
                                             @Override
                                             public void run() {
-                                                if (r == null) {
-                                                    Toast.makeText(c, tr("no_results"),
-                                                            Toast.LENGTH_SHORT).show();
-                                                    return;
-                                                }
+                                                SongInfo s = new SongInfo();
                                                 try {
-                                                    writePositiveCache(
-                                                            c.getApplicationContext() != null
-                                                                    ? c.getApplicationContext() : c,
-                                                            cacheKey(readSong(song)), r);
+                                                    s.id = String.valueOf(getFieldUp(song, "id"));
                                                 } catch (Exception ignored) {
                                                 }
-                                                remember(r.queryUsed, r.source, r.plain, r.synced);
-                                                // renderOnMain starts automatic translation for
-                                                // this source and updates the visible view at once.
-                                                renderOnMain(c.getApplicationContext() != null
-                                                                ? c.getApplicationContext() : c,
-                                                        song, callback, r.plain, r.synced,
-                                                        r.queryUsed, true);
+                                                s.artist = a;
+                                                s.title = t;
+                                                s.duration = info.duration;
+                                                s.hasDuration = info.hasDuration;
+                                                // Try checked providers in the listed order
+                                                // until one returns usable lyrics.
+                                                Result r = null;
+                                                for (String sourceId : selected) {
+                                                    r = fromSource(s, sourceId);
+                                                    if (r != null) break;
+                                                }
+                                                final Result found = r;
+                                                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                                    @Override
+                                                    public void run() {
+                                                        if (found == null) {
+                                                            Toast.makeText(c, tr("no_results"),
+                                                                    Toast.LENGTH_SHORT).show();
+                                                            return;
+                                                        }
+                                                        try {
+                                                            writePositiveCache(
+                                                                    c.getApplicationContext() != null
+                                                                            ? c.getApplicationContext() : c,
+                                                                    cacheKey(readSong(song)), found);
+                                                        } catch (Exception ignored) {
+                                                        }
+                                                        remember(found.queryUsed, found.source,
+                                                                found.plain, found.synced);
+                                                        // renderOnMain resolves the live callback,
+                                                        // shows the lyrics now and starts automatic
+                                                        // translation when it is enabled.
+                                                        renderOnMain(c.getApplicationContext() != null
+                                                                        ? c.getApplicationContext() : c,
+                                                                song, callback,
+                                                                found.plain, found.synced,
+                                                                found.queryUsed, true);
+                                                    }
+                                                });
                                             }
-                                        });
+                                        }).start();
                                     }
-                                }).start();
-                            }
-                        })
+                                })
+                        .setNegativeButton(android.R.string.cancel, null)
                         .show();
             }
         });
