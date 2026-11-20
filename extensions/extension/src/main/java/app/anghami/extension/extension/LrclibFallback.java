@@ -82,6 +82,8 @@ import java.util.regex.Pattern;
 public final class LrclibFallback {
 
     private static final String TAG = "LyricsFallback";
+    // Filterable tag for AI-translation diagnostics (raw responses, salvage).
+    private static final String TRANSLATION_TAG = "LyricsTranslation";
     private static final String SOURCE_URL = "https://lrclib.net";
     private static final String UA = "AnghamiLyricsFallback/1.0 (+https://lrclib.net/docs)";
     private static final String PREFS = "lyrics_fallback";
@@ -3776,8 +3778,8 @@ public final class LrclibFallback {
                                 sessionId, language, systemPrompt, snapshot.lines);
                         writeTranslationCache(ctx, cacheKey, translated);
                     } catch (Throwable t) {
-                        failure = t.getMessage();
-                        Log.d(TAG, provider.displayName + " translation failed: " + t);
+                        failure = safeTranslationError(t);
+                        logTranslation(provider.displayName + " translation failed: " + t);
                     }
                 }
                 final List<String> result = translated;
@@ -4092,10 +4094,32 @@ public final class LrclibFallback {
             if (failure != null) throw new Exception(failure);
             JSONObject result = root.optJSONObject("result");
             Object response = result == null ? null : result.opt("response");
-            if (!(response instanceof String)) {
-                throw new Exception("Cloudflare Workers AI returned no response text");
+            if (response instanceof String) return ((String) response).trim();
+            // Some Workers AI models return structured content instead of a
+            // plain string. Accept the shapes we can read and leave the rest
+            // to the lenient salvage path in parseTranslationResponse.
+            if (response instanceof JSONArray) {
+                StringBuilder combined = new StringBuilder();
+                JSONArray parts = (JSONArray) response;
+                for (int i = 0; i < parts.length(); i++) {
+                    Object part = parts.opt(i);
+                    if (part instanceof String) {
+                        combined.append((String) part);
+                    } else if (part instanceof JSONObject) {
+                        JSONObject partObject = (JSONObject) part;
+                        combined.append(partObject.optString("text",
+                                partObject.optString("content", "")));
+                    }
+                }
+                String text = combined.toString().trim();
+                if (!text.isEmpty()) return text;
+            } else if (response instanceof JSONObject) {
+                JSONObject responseObject = (JSONObject) response;
+                String text = responseObject.optString("text",
+                        responseObject.optString("content", "")).trim();
+                if (!text.isEmpty()) return text;
             }
-            return ((String) response).trim();
+            throw new Exception("Cloudflare Workers AI returned no response text");
         }
         JSONArray choices = root.optJSONArray("choices");
         if (choices == null || choices.length() == 0) {
@@ -4123,51 +4147,249 @@ public final class LrclibFallback {
         throw new Exception("Translation provider returned unsupported content");
     }
 
+    private static final Pattern TRANSLATION_LINES_KEY =
+            Pattern.compile("\"(?:lines|translations)\"\\s*:\\s*\\[", Pattern.CASE_INSENSITIVE);
+
+    private static boolean isJsonParseError(Throwable error) {
+        return error != null && error.getClass().getName().startsWith("org.json.");
+    }
+
+    /** Decode the response/content string from a damaged provider envelope. */
+    private static String lenientEnvelopeContent(String body) {
+        if (body == null) return "";
+        String[] keys = {"response", "content"};
+        for (String key : keys) {
+            Matcher value = Pattern.compile("\"" + key + "\"\\s*:\\s*\"",
+                    Pattern.CASE_INSENSITIVE).matcher(body);
+            if (value.find()) {
+                int[] cursor = new int[1];
+                String decoded = parseLenientString(body, value.end() - 1, cursor);
+                if (!decoded.trim().isEmpty()) return decoded;
+            }
+        }
+        return body;
+    }
+
     private static List<String> parseTranslationResponse(String body, List<Line> source)
             throws Exception {
-        String content = extractTranslationContent(body);
+        String content;
+        try {
+            content = extractTranslationContent(body);
+        } catch (Exception envelopeError) {
+            // A read timeout or output token cap can cut the HTTP body in the
+            // middle of the envelope's response string, producing the same
+            // "Unterminated string at character N" error before we even get to
+            // the model text. Decode what we can from the raw body instead.
+            if (!isJsonParseError(envelopeError)) throw envelopeError;
+            logTranslation("translation envelope parse failed ("
+                    + shortMessage(envelopeError) + "); salvaging raw body: "
+                    + truncateForLog(body));
+            content = lenientEnvelopeContent(body);
+        }
         // Be forgiving about the envelope: fenced markdown, extra keys, a
         // bare array, or the older "translations" name are all acceptable.
         // What matters is getting an array of strings we can align to the
         // source. Models often return a slightly different count even with a
         // strict prompt, so never fail the whole translation for that.
-        String json = content;
+        String json = stripCodeFences(content);
+        List<String> values;
+        try {
+            JSONArray translated = parseStrictTranslationArray(json);
+            values = jsonArrayValues(translated);
+            // A model that ignored the schema sometimes returns one string with
+            // the whole translation separated by newlines. Split it back apart.
+            if (source.size() > 1 && values.size() == 1
+                    && values.get(0).indexOf('\n') >= 0) {
+                String[] parts = values.get(0).split("\\r?\\n");
+                values = new ArrayList<String>();
+                for (String part : parts) values.add(part.trim());
+            }
+        } catch (Throwable parseError) {
+            // Small Cloudflare Workers AI models frequently emit malformed JSON:
+            // raw newlines or quotes inside strings, trailing commas, prose
+            // around the object, or a final string cut off by the token limit.
+            // org.json's "Unterminated string at character N" is exactly this.
+            // Recover what we can instead of failing the whole translation.
+            logTranslation("strict translation JSON failed ("
+                    + parseError.getClass().getSimpleName() + ": "
+                    + shortMessage(parseError) + "); salvaging raw response: "
+                    + truncateForLog(content));
+            values = salvageTranslationLines(content);
+        }
+        return alignTranslationLines(values, source);
+    }
+
+    /** Remove a leading markdown fence (with optional language) from model text. */
+    private static String stripCodeFences(String content) {
+        if (content == null) return "";
+        String json = content.trim();
         if (json.startsWith("```")) {
             json = json.replaceFirst("^```(?:json)?\\s*", "")
                     .replaceFirst("\\s*```$", "").trim();
         }
-        JSONArray translated;
-        if (json.startsWith("[")) {
-            translated = new JSONArray(json);
-        } else {
-            JSONObject result = new JSONObject(json);
-            translated = result.optJSONArray("lines");
-            if (translated == null) translated = result.optJSONArray("translations");
-            if (translated == null) {
-                throw new Exception("Translation response contained no lines array");
-            }
+        return json;
+    }
+
+    /** Unchanged strict path: org.json object/array with "lines" or legacy key. */
+    private static JSONArray parseStrictTranslationArray(String json) throws Exception {
+        if (json.startsWith("[")) return new JSONArray(json);
+        JSONObject result = new JSONObject(json);
+        JSONArray translated = result.optJSONArray("lines");
+        if (translated == null) translated = result.optJSONArray("translations");
+        if (translated == null) {
+            throw new Exception("Translation response contained no lines array");
         }
-        // A model that ignored the schema sometimes returns one string with
-        // the whole translation separated by newlines. Split it back apart.
-        if (source.size() > 1 && translated.length() == 1) {
-            Object only = translated.opt(0);
-            if (only instanceof String && ((String) only).indexOf('\n') >= 0) {
-                String[] parts = ((String) only).split("\\r?\\n");
-                JSONArray split = new JSONArray();
-                for (String part : parts) split.put(part.trim());
-                translated = split;
-            }
+        return translated;
+    }
+
+    private static List<String> jsonArrayValues(JSONArray array) {
+        List<String> values = new ArrayList<String>();
+        for (int i = 0; i < array.length(); i++) {
+            Object value = array.opt(i);
+            values.add(value instanceof String ? (String) value : "");
         }
+        return values;
+    }
+
+    /**
+     * Best-effort recovery for malformed model output. Only called after
+     * strict org.json parsing fails. Looks for a "lines"/"translations" key
+     * first, then a bare array, then falls back to plain text lines.
+     */
+    private static List<String> salvageTranslationLines(String content) {
+        if (content == null || content.trim().isEmpty()) return new ArrayList<String>();
+        int arrayStart = findSalvageArrayStart(content);
+        if (arrayStart >= 0) return parseLenientStringArray(content, arrayStart);
+        return collectProseTranslationLines(content);
+    }
+
+    /** Locate the array to salvage, ignoring fences and surrounding prose. */
+    private static int findSalvageArrayStart(String text) {
+        Matcher key = TRANSLATION_LINES_KEY.matcher(text);
+        if (key.find()) return key.end() - 1;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) != '[') continue;
+            int next = i + 1;
+            while (next < text.length() && Character.isWhitespace(text.charAt(next))) next++;
+            // Only treat it as a value array when it opens with a quoted
+            // string (or is empty), not e.g. a markdown "[link](url)".
+            if (next < text.length()
+                    && (text.charAt(next) == '"' || text.charAt(next) == ']')) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Scan array elements without requiring well-formed JSON. Tolerates a
+     * missing closing quote/bracket/brace, trailing commas, raw newlines and
+     * quotes inside strings, and unquoted values.
+     */
+    private static List<String> parseLenientStringArray(String text, int arrayStart) {
+        List<String> values = new ArrayList<String>();
+        int i = arrayStart + 1; // skip '['
+        int length = text.length();
+        while (i < length) {
+            char c = text.charAt(i);
+            if (c == ']' || c == '}') break;
+            if (c == ',' || Character.isWhitespace(c)) { i++; continue; }
+            if (c == '"') {
+                int[] cursor = new int[1];
+                values.add(parseLenientString(text, i, cursor));
+                i = cursor[0];
+                continue;
+            }
+            // Unquoted value: take everything up to the next separator.
+            int end = i;
+            while (end < length && text.charAt(end) != ','
+                    && text.charAt(end) != ']' && text.charAt(end) != '}') end++;
+            String value = text.substring(i, end).trim();
+            if (!value.isEmpty()) values.add(value);
+            i = end;
+        }
+        return values;
+    }
+
+    /** Read one string value, returning the index just past it via {@code cursor}. */
+    private static String parseLenientString(String text, int openingQuote, int[] cursor) {
+        StringBuilder value = new StringBuilder();
+        int i = openingQuote + 1;
+        int length = text.length();
+        while (i < length) {
+            char c = text.charAt(i);
+            if (c == '\\' && i + 1 < length) {
+                char next = text.charAt(i + 1);
+                switch (next) {
+                    case 'n': value.append('\n'); break;
+                    case 'r': value.append('\r'); break;
+                    case 't': value.append('\t'); break;
+                    case 'b': case 'f': value.append(' '); break;
+                    case 'u': {
+                        boolean decoded = false;
+                        if (i + 5 < length) {
+                            try {
+                                value.append((char) Integer.parseInt(
+                                        text.substring(i + 2, i + 6), 16));
+                                decoded = true;
+                            } catch (NumberFormatException ignored) {
+                            }
+                        }
+                        if (!decoded) value.append(next);
+                        i += decoded ? 4 : 0;
+                        break;
+                    }
+                    default: value.append(next); break;
+                }
+                i += 2;
+                continue;
+            }
+            if (c == '"') {
+                int after = i + 1;
+                while (after < length && Character.isWhitespace(text.charAt(after))) after++;
+                // A quote is a real closing quote only at a structural boundary.
+                // Otherwise it is an unescaped quote inside the translated text.
+                if (after >= length || text.charAt(after) == ','
+                        || text.charAt(after) == ']' || text.charAt(after) == '}') {
+                    cursor[0] = i + 1;
+                    return value.toString();
+                }
+                value.append('"');
+                i++;
+                continue;
+            }
+            // Raw newlines are invalid JSON but common from small models; keep
+            // them as content and let alignTranslationLines fold them to spaces.
+            value.append(c);
+            i++;
+        }
+        // End of input reached with no closing quote (truncated response).
+        cursor[0] = i;
+        return value.toString();
+    }
+
+    /** Last resort: the model returned no array at all; split its text into lines. */
+    private static List<String> collectProseTranslationLines(String content) {
+        List<String> values = new ArrayList<String>();
+        String[] lines = content.replace("\r\n", "\n").split("\n");
+        for (String line : lines) {
+            String text = line.trim();
+            if (text.isEmpty() || text.equals("```") || text.equalsIgnoreCase("```json")) continue;
+            if (text.equals("{") || text.equals("}") || text.equals("[") || text.equals("]")) continue;
+            values.add(text);
+        }
+        return values;
+    }
+
+    /** Pad or truncate recovered values to the source line count, as before. */
+    private static List<String> alignTranslationLines(List<String> values, List<Line> source) {
         List<String> out = new ArrayList<String>();
         for (int i = 0; i < source.size(); i++) {
             boolean sourceBlank = source.get(i).text == null
                     || source.get(i).text.trim().isEmpty();
             String text = "";
-            if (i < translated.length()) {
-                Object value = translated.opt(i);
-                if (value instanceof String) {
-                    text = ((String) value).replace('\r', ' ')
-                            .replace('\n', ' ').trim();
+            if (values != null && i < values.size()) {
+                String candidate = values.get(i);
+                if (candidate != null) {
+                    text = candidate.replace('\r', ' ').replace('\n', ' ').trim();
                 }
             }
             // An empty translation renders the original line, which is the
@@ -4175,6 +4397,37 @@ public final class LrclibFallback {
             out.add(sourceBlank || text.isEmpty() ? "" : text);
         }
         return out;
+    }
+
+    /** Log with the translation tag; android.util.Log is a stub in unit tests. */
+    private static void logTranslation(String message) {
+        try {
+            Log.d(TRANSLATION_TAG, message);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Short, single-line excerpt of a raw response for logcat. */
+    private static String truncateForLog(String text) {
+        if (text == null) return "";
+        String oneLine = text.replace('\r', ' ').replace('\n', ' ');
+        return oneLine.length() <= 500 ? oneLine : oneLine.substring(0, 500) + "...(truncated)";
+    }
+
+    private static String shortMessage(Throwable throwable) {
+        if (throwable == null) return "";
+        return truncateForLog(throwable.getMessage() == null
+                ? throwable.getClass().getSimpleName() : throwable.getMessage());
+    }
+
+    /** Keep toast errors readable even when org.json embeds the whole payload. */
+    private static String safeTranslationError(Throwable throwable) {
+        if (throwable == null) return "";
+        String message = throwable.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return throwable.getClass().getSimpleName();
+        }
+        return truncateForLog(message);
     }
 
     /** Show a short status line on the live lyrics view (search progress). */

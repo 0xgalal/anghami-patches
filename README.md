@@ -176,6 +176,24 @@ background, text, button and card colors captured when the previous theme was
 applied, and stops all further tinting. It behaves the same in dark and light
 system modes — neither mode gets an overlay.
 
+### Startup: login screen and self-restart
+
+**Remove startup login + self-restart** addresses two device reports on 8.0.28:
+
+- The login prompt is Anghami's own startup gate, not a patch side effect.
+  `MainActivity.onCreate` stores a boolean (`MainActivity.J`) meaning "no
+  session"; when it is true the activity redirects to `LoginActivity`. The
+  patch forces that flag false so the normal home screen opens directly.
+- The self-restart is also stock: `BaseActivity.onResume` calls
+  `BaseActivity.restartApp()` (`finishAffinity()` + relaunch `MainActivity`)
+  when cached Google/HMS availability codes change. The patch turns that
+  helper into a no-op.
+
+This is a client-side bypass only — it removes the prompt, it does not create a
+session. A repackaged APK still has a different signing certificate, so server
+authentication and server-gated content can keep failing. Keep "Spoof stock app
+signature" enabled if you rely on server requests succeeding.
+
 ### 🛠️ Building locally
 
 - Run `./gradlew buildAndroid`
