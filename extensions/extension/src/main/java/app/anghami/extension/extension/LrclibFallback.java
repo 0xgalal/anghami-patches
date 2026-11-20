@@ -85,6 +85,7 @@ public final class LrclibFallback {
     private static final String SOURCE_URL = "https://lrclib.net";
     private static final String UA = "AnghamiLyricsFallback/1.0 (+https://lrclib.net/docs)";
     private static final String PREFS = "lyrics_fallback";
+    private static final String PREF_LYRIC_SOURCES = "lyric_sources";
     private static final String KEY_VERSION = "v1";
     // Retain the preference file so existing credentials and caches survive upgrades.
     private static final String TRANSLATION_PREFS = "lyrics_openrouter";
@@ -1506,6 +1507,33 @@ public final class LrclibFallback {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    /** Remember which providers the user checked in the lyrics options dialog. */
+    private static boolean[] loadSelectedSources(Context ctx) {
+        boolean[] checked = new boolean[LYRIC_SOURCE_IDS.length];
+        String raw = prefs(ctx).getString(PREF_LYRIC_SOURCES, null);
+        if (raw == null || raw.trim().isEmpty()) {
+            for (int i = 0; i < checked.length; i++) checked[i] = true;
+            return checked;
+        }
+        String[] saved = raw.split(",");
+        for (String id : saved) {
+            for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
+                if (LYRIC_SOURCE_IDS[i].equals(id.trim())) checked[i] = true;
+            }
+        }
+        return checked;
+    }
+
+    private static void saveSelectedSources(Context ctx, boolean[] checked) {
+        StringBuilder raw = new StringBuilder();
+        for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
+            if (!checked[i]) continue;
+            if (raw.length() > 0) raw.append(',');
+            raw.append(LYRIC_SOURCE_IDS[i]);
+        }
+        prefs(ctx).edit().putString(PREF_LYRIC_SOURCES, raw.toString()).apply();
+    }
+
     private static Cached readCache(Context ctx, String key) {
         try {
             String raw = prefs(ctx).getString(key, null);
@@ -2267,6 +2295,53 @@ public final class LrclibFallback {
         }
     }
 
+    /**
+     * Paint a manually picked result immediately. This deliberately skips
+     * renderOnMain's idempotence check: search status lines already replaced
+     * the screen, so the result must paint even if its text matches what was
+     * displayed before the search started.
+     */
+    private static void applyPickedLyrics(Context ctx, Object song, Object callback,
+                                          Result picked) {
+        try {
+            if (ctx == null || song == null || callback == null || picked == null) return;
+            Context appCtx = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
+            // Make sure the player is actually showing the lyrics tab; a
+            // picked result rendered into a hidden view looks like "nothing
+            // happened".
+            WeakReference<Object> ref = playerFragment;
+            ensureLyricsMode(ref == null ? null : ref.get());
+            writePositiveCache(appCtx, cacheKey(readSong(song)), picked);
+            remember(picked.queryUsed, picked.source, picked.plain, picked.synced);
+
+            Class<?> responseClass =
+                    Class.forName("com.anghami.ghost.api.response.LyricsResponse");
+            Object response = responseClass.newInstance();
+            setLineField(response, "songId", getFieldUp(song, "id"));
+            setLineField(response, "truncated", false);
+            boolean synced = picked.synced != null && !picked.synced.isEmpty();
+            setLineField(response, "isSynced", synced);
+            List<Object> lines = buildLines(response, picked.plain, picked.synced);
+            setLineField(response, "lyricsSynced", synced ? lines : null);
+            setLineField(response, "lyricsUnsynced", synced ? null : picked.plain);
+
+            Object latest = callbackForSong(song);
+            if (latest == null) latest = callback;
+            invokeRender(latest, song, lines, response);
+
+            // Automatic translation runs from the same source bookkeeping.
+            if (synced) {
+                List<Line> sourceLines = parseLrc(picked.synced);
+                if (!sourceLines.isEmpty()) {
+                    setTranslationSource(readSong(song), song, latest, sourceLines, true);
+                }
+            }
+            Log.d(TAG, "picked lyrics applied from " + picked.source);
+        } catch (Throwable t) {
+            Log.d(TAG, "could not apply picked lyrics: " + t);
+        }
+    }
+
     private static void renderOnMain(final Context ctx, final Object songObj,
                                      Object callbackObj, final String plain,
                                      final String synced, final String queryUsed,
@@ -2628,10 +2703,9 @@ public final class LrclibFallback {
                 // of the lyrics view and hides the result.
                 dialog.dismiss();
                 String[] labels = new String[LYRIC_SOURCE_IDS.length];
-                final boolean[] checked = new boolean[LYRIC_SOURCE_IDS.length];
+                final boolean[] checked = loadSelectedSources(c);
                 for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
                     labels[i] = sourceLabel(LYRIC_SOURCE_IDS[i]);
-                    checked[i] = true;
                 }
                 new AlertDialog.Builder(c)
                         .setTitle(tr("lyrics_sources"))
@@ -2649,6 +2723,7 @@ public final class LrclibFallback {
                                                     Toast.LENGTH_SHORT).show();
                                             return;
                                         }
+                                        saveSelectedSources(c, checked);
                                         Toast.makeText(c, tr("searching"), Toast.LENGTH_SHORT).show();
                                         new Thread(new Runnable() {
                                             @Override
@@ -2682,23 +2757,7 @@ public final class LrclibFallback {
                                                                     Toast.LENGTH_SHORT).show();
                                                             return;
                                                         }
-                                                        try {
-                                                            writePositiveCache(
-                                                                    c.getApplicationContext() != null
-                                                                            ? c.getApplicationContext() : c,
-                                                                    cacheKey(readSong(song)), found);
-                                                        } catch (Exception ignored) {
-                                                        }
-                                                        remember(found.queryUsed, found.source,
-                                                                found.plain, found.synced);
-                                                        // renderOnMain resolves the live callback,
-                                                        // shows the lyrics now and starts automatic
-                                                        // translation when it is enabled.
-                                                        renderOnMain(c.getApplicationContext() != null
-                                                                        ? c.getApplicationContext() : c,
-                                                                song, callback,
-                                                                found.plain, found.synced,
-                                                                found.queryUsed, true);
+                                                        applyPickedLyrics(c, song, callback, found);
                                                     }
                                                 });
                                             }
@@ -2714,7 +2773,12 @@ public final class LrclibFallback {
             public void onClick(View v) {
                 try {
                     Context c = v.getContext();
+                    // Keep the user's provider selection when clearing lyrics.
+                    String savedSources = prefs(c).getString(PREF_LYRIC_SOURCES, null);
                     prefs(c).edit().clear().apply();
+                    if (savedSources != null) {
+                        prefs(c).edit().putString(PREF_LYRIC_SOURCES, savedSources).apply();
+                    }
                     Toast.makeText(c, tr("cache_cleared"), Toast.LENGTH_SHORT).show();
                     Log.d(TAG, "fallback cache cleared by user");
                 } catch (Throwable t) {
