@@ -527,7 +527,12 @@ public final class LrclibFallback {
             public void run() {
                 Result r;
                 try {
-                    r = waterfall(song);
+                    r = waterfall(song, new SearchProgress() {
+                        @Override
+                        public void update(String message) {
+                            renderSearchStatus(songObj, callback, message);
+                        }
+                    });
                 } catch (Throwable t) {
                     return;
                 }
@@ -611,12 +616,20 @@ public final class LrclibFallback {
             final SongInfo songFinal = song;
             final String keyFinal = key;
             final boolean serverEmptyFinal = serverEmpty;
+            final SearchProgress progress = new SearchProgress() {
+                @Override
+                public void update(String message) {
+                    // Refresh the lyrics view as each provider is attempted,
+                    // so "no lyrics" is visibly followed by the next try.
+                    renderSearchStatus(songRef, cbRef, message);
+                }
+            };
             new Thread(new Runnable() {
                 @Override
                 public void run() {
                     Result r;
                     try {
-                        r = waterfall(songFinal);
+                        r = waterfall(songFinal, progress);
                     } catch (RateLimited rl) {
                         Log.d(TAG, "rate limited, keeping server view for songId=" + songFinal.id);
                         return;
@@ -1230,6 +1243,11 @@ public final class LrclibFallback {
             if (fr) return "Sources des paroles";
             return "Lyrics sources";
         }
+        if ("trying_source".equals(key)) {
+            if (ar) return "جارٍ البحث في %s…";
+            if (fr) return "Recherche sur %s…";
+            return "Trying %s…";
+        }
         if ("ai_note".equals(key)) {
             if (ar) return "ستظهر الترجمة أسفل كل سطر أصلي مع الحفاظ على التوقيت.";
             if (fr) return "La traduction apparaît sous chaque ligne originale, synchronisée.";
@@ -1608,21 +1626,34 @@ public final class LrclibFallback {
         return null;
     }
 
+    /** Lets a lookup tell the player which provider it is trying right now. */
+    private interface SearchProgress {
+        void update(String message);
+    }
+
     private static Result waterfall(SongInfo song) {
+        return waterfall(song, null);
+    }
+
+    private static Result waterfall(SongInfo song, SearchProgress progress) {
+        if (progress != null) progress.update(tr("searching"));
         Result r = fromLrclib(song);
         if (r != null) return r;
-        return fromExtendedSources(song);
+        return fromExtendedSources(song, progress);
     }
 
     /** Keep trying source after source until one returns usable lyrics. */
-    private static Result fromExtendedSources(SongInfo song) {
-        Result r = fromKugou(song);
-        if (r != null) return r;
-        r = fromLyricsPlus(song);
-        if (r != null) return r;
-        r = fromBetterLyrics(song);
-        if (r != null) return r;
-        return fromPaxsenix(song);
+    private static Result fromExtendedSources(SongInfo song, SearchProgress progress) {
+        String[] ids = {"kugou", "lyricsplus", "betterlyrics", "paxsenix"};
+        for (String id : ids) {
+            if (progress != null) {
+                progress.update(String.format(Locale.ROOT, tr("trying_source"),
+                        sourceLabel(id)));
+            }
+            Result r = fromSource(song, id);
+            if (r != null) return r;
+        }
+        return null;
     }
 
     private static Result fromLrclib(SongInfo song) {
@@ -2635,6 +2666,10 @@ public final class LrclibFallback {
                                                 // until one returns usable lyrics.
                                                 Result r = null;
                                                 for (String sourceId : selected) {
+                                                    renderSearchStatus(song, callback,
+                                                            String.format(Locale.ROOT,
+                                                                    tr("trying_source"),
+                                                                    sourceLabel(sourceId)));
                                                     r = fromSource(s, sourceId);
                                                     if (r != null) break;
                                                 }
@@ -3889,19 +3924,27 @@ public final class LrclibFallback {
         return out;
     }
 
-    private static void renderTranslationPending(final Object song,
-                                                final Object callback) {
-        if (song == null || callback == null) return;
+    /** Show a short status line on the live lyrics view (search progress). */
+    private static void renderSearchStatus(final Object song, final Object callback,
+                                           final String message) {
+        if (song == null || callback == null || message == null) return;
         Runnable render = new Runnable() {
             @Override
             public void run() {
                 try {
-                    String message = tr("translation_pending");
                     Object response = buildResponse(song, message, null);
                     if (response == null) return;
-                    invokeRender(callback, song, buildLines(response, message, null), response);
+                    Object latest = callbackForSong(song);
+                    if (latest == null) latest = callback;
+                    // A status line replaces the lyrics on screen. Drop the
+                    // last-render key so the following result always paints,
+                    // even when it is the same text as before the search.
+                    synchronized (LrclibFallback.class) {
+                        renderedKeys.remove(latest);
+                    }
+                    invokeRender(latest, song, buildLines(response, message, null), response);
                 } catch (Throwable t) {
-                    Log.d(TAG, "could not render translation-pending state: " + t);
+                    Log.d(TAG, "could not render search status: " + t);
                 }
             }
         };
@@ -3910,6 +3953,11 @@ public final class LrclibFallback {
         } else {
             new Handler(Looper.getMainLooper()).post(render);
         }
+    }
+
+    private static void renderTranslationPending(final Object song,
+                                                final Object callback) {
+        renderSearchStatus(song, callback, tr("translation_pending"));
     }
 
     private static void renderOriginalLyricsIfCurrent(Object song, SourceSnapshot expected) {
