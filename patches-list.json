@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.17.1",
+  "version": "1.17.2",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
@@ -39,7 +39,7 @@
     {
       "name": "AMOLED black background",
       "description": "Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched.",
-      "default": true,
+      "default": false,
       "category": null,
       "dependencies": [],
       "compatiblePackages": [
@@ -297,7 +297,7 @@
     {
       "name": "Monet dynamic colors",
       "description": "Replaces the static neon brand accents with wallpaper-based Monet dynamic colors (M3 Expressive primary/secondary/tertiary roles) on Android 12+. Older versions keep stock colors.",
-      "default": true,
+      "default": false,
       "category": null,
       "dependencies": [],
       "compatiblePackages": [
@@ -329,7 +329,7 @@
     {
       "name": "Player theme",
       "description": "Night-only player theme: removes the cover-art tint and paints the now-playing row, pills and action icons with the primary accent at night; day mode keeps the stock tinted player. Pulls in 'Player theme background' resources.",
-      "default": true,
+      "default": false,
       "category": "Experimental",
       "dependencies": [
         "ResourcePatch"
@@ -363,7 +363,7 @@
     {
       "name": "Player theme background",
       "description": "Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'.",
-      "default": true,
+      "default": false,
       "category": "Experimental",
       "dependencies": [],
       "compatiblePackages": [
@@ -395,38 +395,6 @@
     {
       "name": "Remove popup promos",
       "description": "No-ops the in-house popup funnel, the fullscreen startup dialog, and the flyer ad callback. Google SDK ads untouched.",
-      "default": true,
-      "category": null,
-      "dependencies": [],
-      "compatiblePackages": [
-        {
-          "packageName": "com.anghami",
-          "name": "Anghami",
-          "description": null,
-          "apkFileType": "APKM",
-          "appIconColor": "#A020F0",
-          "signatures": null,
-          "targets": [
-            {
-              "version": "8.0.28",
-              "versionCodes": {
-                "ARM64_V8A": 8000280,
-                "ARMEABI_V7A": 8000280,
-                "X86": 8000280,
-                "X86_64": 8000280
-              },
-              "isExperimental": false,
-              "minSdk": null,
-              "description": null
-            }
-          ]
-        }
-      ],
-      "options": []
-    },
-    {
-      "name": "Remove startup login + self-restart",
-      "description": "Skips the stock self-restart in BaseActivity.onResume and forces MainActivity's login gate false on startup. Client-side only; no session is created, so server-backed data may still fail.",
       "default": true,
       "category": null,
       "dependencies": [],
@@ -489,80 +457,11 @@
       "options": []
     },
     {
-      "name": "Theme row title",
-      "description": "Retitles the runtime Theme settings row to 'THEME' by repurposing the unused dummy_tag_1 string resource.",
+      "name": "Unforce shuffle",
+      "description": "Forces server shuffleOn=false at both sync points, never reports shuffle to the server, disables the pick-a-song radio redirect, enables shuffle buttons, and disarms the shuffle upsell dialog. Manual shuffle toggle and the header Shuffle button keep working.",
       "default": true,
       "category": null,
       "dependencies": [],
-      "compatiblePackages": [
-        {
-          "packageName": "com.anghami",
-          "name": "Anghami",
-          "description": null,
-          "apkFileType": "APKM",
-          "appIconColor": "#A020F0",
-          "signatures": null,
-          "targets": [
-            {
-              "version": "8.0.28",
-              "versionCodes": {
-                "ARM64_V8A": 8000280,
-                "ARMEABI_V7A": 8000280,
-                "X86": 8000280,
-                "X86_64": 8000280
-              },
-              "isExperimental": false,
-              "minSdk": null,
-              "description": null
-            }
-          ]
-        }
-      ],
-      "options": []
-    },
-    {
-      "name": "Theme section in Settings",
-      "description": "Adds a Theme section to Settings with six presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz, Default) for the app chrome and player.",
-      "default": true,
-      "category": null,
-      "dependencies": [
-        "BytecodePatch",
-        "ResourcePatch"
-      ],
-      "compatiblePackages": [
-        {
-          "packageName": "com.anghami",
-          "name": "Anghami",
-          "description": null,
-          "apkFileType": "APKM",
-          "appIconColor": "#A020F0",
-          "signatures": null,
-          "targets": [
-            {
-              "version": "8.0.28",
-              "versionCodes": {
-                "ARM64_V8A": 8000280,
-                "ARMEABI_V7A": 8000280,
-                "X86": 8000280,
-                "X86_64": 8000280
-              },
-              "isExperimental": false,
-              "minSdk": null,
-              "description": null
-            }
-          ]
-        }
-      ],
-      "options": []
-    },
-    {
-      "name": "Unforce shuffle",
-      "description": "Forces server shuffleOn=false, blocks client-reported skip-limit similar-song fallback, disables the pick-a-song radio redirect, and enables shuffle buttons without breaking manual or header Shuffle.",
-      "default": true,
-      "category": null,
-      "dependencies": [
-        "BytecodePatch"
-      ],
       "compatiblePackages": [
         {
           "packageName": "com.anghami",

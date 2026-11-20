@@ -1,3 +1,9 @@
+## [1.17.2](https://github.com/0xgalal/anghami-patches/compare/v1.17.1...v1.17.2) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* restore v1.3.0 patch baseline and trigger release ([67bda02](https://github.com/0xgalal/anghami-patches/commit/67bda02b93a9c6fd4a4573c5aedd669ce91f5511))
+
 ## [1.17.1](https://github.com/0xgalal/anghami-patches/compare/v1.17.0...v1.17.1) (2026-11-20)
 
 ### 🐛 Bug Fixes

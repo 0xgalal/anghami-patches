@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T15:01:11",
-  "description": "## [1.17.1](https://github.com/0xgalal/anghami-patches/compare/v1.17.0...v1.17.1) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* salvage malformed Cloudflare translation JSON and remove startup login/restart ([1bc9b08](https://github.com/0xgalal/anghami-patches/commit/1bc9b08058dac6b50af9a4a461ebc1f363d6d52a))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.1/patches-1.17.1.mpp",
+  "created_at": "2026-11-20T15:23:02",
+  "description": "## [1.17.2](https://github.com/0xgalal/anghami-patches/compare/v1.17.1...v1.17.2) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* restore v1.3.0 patch baseline and trigger release ([67bda02](https://github.com/0xgalal/anghami-patches/commit/67bda02b93a9c6fd4a4573c5aedd669ce91f5511))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.2/patches-1.17.2.mpp",
   "signature_download_url": "",
-  "version": "1.17.1"
+  "version": "1.17.2"
 }
