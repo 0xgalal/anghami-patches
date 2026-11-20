@@ -11,8 +11,10 @@ private const val THEME_HELPER = "Lapp/anghami/extension/extension/ThemeManager;
 
 /**
  * Adds a "Theme" section to Anghami's native Settings page and applies the
- * selected preset to the app chrome (status/navigation bars on every screen)
- * and to the player surface (root background + control-row accents).
+ * selected preset to the whole app: window + status/navigation bars, the
+ * Android view hierarchy (backgrounds, text, buttons, cards, toolbars) and
+ * the player surface (root background + control-row accents). Each preset
+ * has a dark and a brighter light palette selected from the current uiMode.
  *
  * The picker offers five presets — Tokyo Nights, Neon Sunset, Midnight Ocean,
  * Forest Glow and Rose Quartz — stored in SharedPreferences so a single
@@ -28,7 +30,9 @@ val themeSettingsPatch = bytecodePatch(
     default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
-    dependsOn(lyricsFallbackPatch)
+    // A single Patch cannot touch both dex and resources; the row title comes
+    // from a repurposed unused string applied by this companion resource patch.
+    dependsOn(lyricsFallbackPatch, themeTitleResourcePatch)
 
     execute {
         // Register lifecycle callbacks once, at app startup. AnghamiApplication.onCreate

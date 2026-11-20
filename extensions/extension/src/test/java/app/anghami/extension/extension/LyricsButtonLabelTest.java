@@ -17,8 +17,5 @@ public class LyricsButtonLabelTest {
     public void ignoresUnrelatedLabels() {
         assertFalse(LrclibFallback.isLyricsButtonLabel("Play"));
         assertFalse(LrclibFallback.isLyricsButtonLabel(""));
-        // The injected one-tap manual-translate control must not inherit the
-        // "Lyrics + AI" suffix that is applied to native Lyrics labels.
-        assertFalse(LrclibFallback.isLyricsButtonLabel("AI"));
     }
 }

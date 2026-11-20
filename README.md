@@ -34,7 +34,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 | 💊&nbsp;Patch | 📜&nbsp;Description | ⚙️&nbsp;Options |
 |----------|----------------|-----------|
-| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. A compact AI button after the player Lyrics button translates the current song on tap; long-press Lyrics to configure. |  |
+| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
@@ -73,30 +73,26 @@ When Anghami returns truncated or empty lyrics, the fallback looks for full
 synced lyrics in this order and stops at the first match:
 
 1. **LRCLIB** — open, key-less database; best coverage for Western pop.
-2. **KuGou** — large CJK catalogue (Mandarin, Cantonese, Japanese, Korean).
-3. **LyricsPlus** — aggregator querying Apple, Musixmatch and Spotify.
-4. **Better Lyrics** — Apple TTML with tight line timings.
-5. **Paxsenix** — Apple Music catalogue search plus track lyrics.
+2. **LyricsPlus** — aggregator querying Apple, Musixmatch and Spotify.
+3. **Better Lyrics** — Apple TTML with tight line timings.
 
 Each source is optional: a timeout or error just moves on to the next one.
 Results are cached per song, and a cached "no lyrics found" is re-checked in
 the background so an update from any source appears without reopening the
 song. The player's **Lyrics options** dialog has a **Lyrics sources** button
-that lets you pick a single source manually; the result is shown immediately
-and sent for translation when automatic translation is enabled.
+that lets you choose which sources to use. The selection is one saved global
+preference: it is shown as-is for every song and only changes when you change a
+checkbox. The result is shown immediately and sent for translation when
+automatic translation is enabled.
 
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 
 Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It pulls in
 the LRCLIB fallback patch it depends on.
-In the player, a compact **AI** button sits immediately after the native
-**Lyrics** button for one-tap manual translation of the current song. It uses
-your saved provider, key, model, and language; if those are not configured yet,
-it opens the translation settings dialog instead. Long-pressing **Lyrics**
-opens that same dialog to configure automatic translation. Tap **Provider** to
-select **OpenRouter**, **OpenCode**, or **xKiro**, then enter
-that provider's API key, model ID, and target language. Keys and selected models
-are saved separately for each provider.
+In the player, long-press the native **Lyrics** button to open the translation
+dialog. Tap **Provider** to select **OpenRouter**, **OpenCode**, or **xKiro**,
+then enter that provider's API key, model ID, and target language. Keys and
+selected models are saved separately for each provider.
 
 The model picker fetches OpenRouter's current free models, OpenCode's
 externally usable chat models, or xKiro's public chat catalog. If a catalog
@@ -143,7 +139,7 @@ page (next to the Music section). Opening it offers five presets:
 | Rose Quartz | Dark rose with pink and blush accents |
 
 A preset recolors the app chrome (status and navigation bars on every screen)
-and the player surface (root background and the Lyrics / Queue / AI control-row
+and the player surface (root background and the Lyrics / Queue control-row
 accents). It is stored in app-private preferences, so changing it takes effect
 immediately and survives restarts. This is a runtime overlay — the existing
 build-time **Player theme** / **Player theme background** palettes are left
