@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T10:08:00",
-  "description": "## [1.13.3](https://github.com/0xgalal/anghami-patches/compare/v1.13.2...v1.13.3) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* enable all patches by default so Morphe lists them ([dd6865c](https://github.com/0xgalal/anghami-patches/commit/dd6865cbc116891896476171d2ed7f1d85871bbf))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.3/patches-1.13.3.mpp",
+  "created_at": "2026-11-20T10:28:10",
+  "description": "## [1.13.4](https://github.com/0xgalal/anghami-patches/compare/v1.13.3...v1.13.4) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* render picked lyrics through the standard render path ([09eb8f7](https://github.com/0xgalal/anghami-patches/commit/09eb8f7793cefa07b3e08f85a6d75693bd6ee2a2))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.4/patches-1.13.4.mpp",
   "signature_download_url": "",
-  "version": "1.13.3"
+  "version": "1.13.4"
 }

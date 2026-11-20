@@ -1,3 +1,9 @@
+## [1.13.4](https://github.com/0xgalal/anghami-patches/compare/v1.13.3...v1.13.4) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* render picked lyrics through the standard render path ([09eb8f7](https://github.com/0xgalal/anghami-patches/commit/09eb8f7793cefa07b3e08f85a6d75693bd6ee2a2))
+
 ## [1.13.3](https://github.com/0xgalal/anghami-patches/compare/v1.13.2...v1.13.3) (2026-11-20)
 
 ### 🐛 Bug Fixes
