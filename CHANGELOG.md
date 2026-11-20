@@ -1,3 +1,9 @@
+## [1.13.2](https://github.com/0xgalal/anghami-patches/compare/v1.13.1...v1.13.2) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* build patch DEX in release recovery workflow ([6d4fbe9](https://github.com/0xgalal/anghami-patches/commit/6d4fbe9cbf3e48399b8287c926c2f5b09ffc0640))
+
 ## [1.13.1](https://github.com/0xgalal/anghami-patches/compare/v1.13.0...v1.13.1) (2026-11-20)
 
 ### 🐛 Bug Fixes
