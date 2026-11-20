@@ -1,3 +1,9 @@
+## [1.11.1](https://github.com/0xgalal/anghami-patches/compare/v1.11.0...v1.11.1) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* tolerate translation line counts and refresh late lyric renders ([f373944](https://github.com/0xgalal/anghami-patches/commit/f3739448c03c16f46477278dfbc18ec7b53e0435))
+
 ## [1.11.0](https://github.com/0xgalal/anghami-patches/compare/v1.10.7...v1.11.0) (2026-11-19)
 
 ### 🐛 Bug Fixes
