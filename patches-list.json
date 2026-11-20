@@ -1,11 +1,11 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.13.2",
+  "version": "1.13.3",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
       "description": "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press the player Lyrics button to configure it.",
-      "default": false,
+      "default": true,
       "category": null,
       "dependencies": [
         "BytecodePatch"
@@ -39,7 +39,7 @@
     {
       "name": "AMOLED black background",
       "description": "Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched.",
-      "default": false,
+      "default": true,
       "category": null,
       "dependencies": [],
       "compatiblePackages": [
@@ -265,7 +265,7 @@
     {
       "name": "LRCLIB lyrics fallback",
       "description": "When the server returns truncated/empty lyrics, fetches the full text from LRCLIB (opt-in free source) into a separate cache. Native full lyrics and the Plus path are untouched.",
-      "default": false,
+      "default": true,
       "category": null,
       "dependencies": [],
       "compatiblePackages": [
@@ -297,7 +297,7 @@
     {
       "name": "Monet dynamic colors",
       "description": "Replaces the static neon brand accents with wallpaper-based Monet dynamic colors (M3 Expressive primary/secondary/tertiary roles) on Android 12+. Older versions keep stock colors.",
-      "default": false,
+      "default": true,
       "category": null,
       "dependencies": [],
       "compatiblePackages": [
@@ -329,7 +329,7 @@
     {
       "name": "Player theme",
       "description": "Night-only player theme: removes the cover-art tint and paints the now-playing row, pills and action icons with the primary accent at night; day mode keeps the stock tinted player. Pulls in 'Player theme background' resources.",
-      "default": false,
+      "default": true,
       "category": "Experimental",
       "dependencies": [
         "ResourcePatch"
@@ -363,7 +363,7 @@
     {
       "name": "Player theme background",
       "description": "Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'.",
-      "default": false,
+      "default": true,
       "category": "Experimental",
       "dependencies": [],
       "compatiblePackages": [

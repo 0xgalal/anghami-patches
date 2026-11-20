@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T09:31:57",
-  "description": "## [1.13.2](https://github.com/0xgalal/anghami-patches/compare/v1.13.1...v1.13.2) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* build patch DEX in release recovery workflow ([6d4fbe9](https://github.com/0xgalal/anghami-patches/commit/6d4fbe9cbf3e48399b8287c926c2f5b09ffc0640))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.2/patches-1.13.2.mpp",
+  "created_at": "2026-11-20T10:08:00",
+  "description": "## [1.13.3](https://github.com/0xgalal/anghami-patches/compare/v1.13.2...v1.13.3) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* enable all patches by default so Morphe lists them ([dd6865c](https://github.com/0xgalal/anghami-patches/commit/dd6865cbc116891896476171d2ed7f1d85871bbf))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.3/patches-1.13.3.mpp",
   "signature_download_url": "",
-  "version": "1.13.2"
+  "version": "1.13.3"
 }

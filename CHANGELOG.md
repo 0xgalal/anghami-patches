@@ -1,3 +1,9 @@
+## [1.13.3](https://github.com/0xgalal/anghami-patches/compare/v1.13.2...v1.13.3) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* enable all patches by default so Morphe lists them ([dd6865c](https://github.com/0xgalal/anghami-patches/commit/dd6865cbc116891896476171d2ed7f1d85871bbf))
+
 ## [1.13.2](https://github.com/0xgalal/anghami-patches/compare/v1.13.1...v1.13.2) (2026-11-20)
 
 ### 🐛 Bug Fixes
