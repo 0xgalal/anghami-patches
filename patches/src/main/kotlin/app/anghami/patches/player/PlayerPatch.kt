@@ -72,7 +72,7 @@ private const val NIGHT_WASH_FIELD = "playerNightWash"
 val playerPatch = bytecodePatch(
     name = "Player theme",
     description = "Night-only player theme: removes the cover-art tint and paints the now-playing row, pills and action icons with the primary accent at night; day mode keeps the stock tinted player. Pulls in 'Player theme background' resources.",
-    default = false,
+    default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     category("Experimental")
