@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
@@ -395,6 +395,38 @@
     {
       "name": "Remove popup promos",
       "description": "No-ops the in-house popup funnel, the fullscreen startup dialog, and the flyer ad callback. Google SDK ads untouched.",
+      "default": true,
+      "category": null,
+      "dependencies": [],
+      "compatiblePackages": [
+        {
+          "packageName": "com.anghami",
+          "name": "Anghami",
+          "description": null,
+          "apkFileType": "APKM",
+          "appIconColor": "#A020F0",
+          "signatures": null,
+          "targets": [
+            {
+              "version": "8.0.28",
+              "versionCodes": {
+                "ARM64_V8A": 8000280,
+                "ARMEABI_V7A": 8000280,
+                "X86": 8000280,
+                "X86_64": 8000280
+              },
+              "isExperimental": false,
+              "minSdk": null,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "options": []
+    },
+    {
+      "name": "Remove startup login + self-restart",
+      "description": "Skips the stock self-restart in BaseActivity.onResume and forces MainActivity's login gate false on startup. Client-side only; no session is created, so server-backed data may still fail.",
       "default": true,
       "category": null,
       "dependencies": [],

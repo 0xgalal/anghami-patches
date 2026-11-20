@@ -1,3 +1,9 @@
+## [1.17.1](https://github.com/0xgalal/anghami-patches/compare/v1.17.0...v1.17.1) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* salvage malformed Cloudflare translation JSON and remove startup login/restart ([1bc9b08](https://github.com/0xgalal/anghami-patches/commit/1bc9b08058dac6b50af9a4a461ebc1f363d6d52a))
+
 ## [1.17.0](https://github.com/0xgalal/anghami-patches/compare/v1.16.0...v1.17.0) (2026-11-20)
 
 ### ✨ New Features

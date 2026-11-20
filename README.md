@@ -22,9 +22,9 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.17.0](https://github.com/0xgalal/anghami-patches/releases/tag/v1.17.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;20 patches total
+> **[v1.17.1](https://github.com/0xgalal/anghami-patches/releases/tag/v1.17.1)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;21 patches total
 <details open>
-<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;20 patches</summary>
+<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;21 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -47,6 +47,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 | [Player theme](#player-theme) | Night-only player theme: removes the cover-art tint and paints the now-playing row, pills and action icons with the primary accent at night; day mode keeps the stock tinted player. Pulls in 'Player theme background' resources. |  |
 | [Player theme background](#player-theme-background) | Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'. |  |
 | [Remove popup promos](#remove-popup-promos) | No-ops the in-house popup funnel, the fullscreen startup dialog, and the flyer ad callback. Google SDK ads untouched. |  |
+| [Remove startup login + self-restart](#remove-startup-login-self-restart) | Skips the stock self-restart in BaseActivity.onResume and forces MainActivity's login gate false on startup. Client-side only; no session is created, so server-backed data may still fail. |  |
 | [Spoof stock app signature](#spoof-stock-app-signature) | Forces SignatureUtils.getAppSignature to hash with the stock cert prefix (he9B...kw=), so X-ANGH-APP-RGSIG matches a stock install. Salt/body hashing unchanged. |  |
 | [Theme row title](#theme-row-title) | Retitles the runtime Theme settings row to 'THEME' by repurposing the unused dummy_tag_1 string resource. |  |
 | [Theme section in Settings](#theme-section-in-settings) | Adds a Theme section to Settings with six presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz, Default) for the app chrome and player. |  |
