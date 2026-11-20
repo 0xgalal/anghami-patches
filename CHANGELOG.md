@@ -1,3 +1,9 @@
+## [1.13.7](https://github.com/0xgalal/anghami-patches/compare/v1.13.6...v1.13.7) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* nop shuffle copy write instead of label-carrying read ([1bc1941](https://github.com/0xgalal/anghami-patches/commit/1bc19410d5936227e44297aaa14180cd209e2ea0))
+
 ## [1.13.6](https://github.com/0xgalal/anghami-patches/compare/v1.13.5...v1.13.6) (2026-11-20)
 
 ### 🐛 Bug Fixes
