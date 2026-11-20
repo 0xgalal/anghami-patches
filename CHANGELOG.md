@@ -1,3 +1,9 @@
+## [1.13.1](https://github.com/0xgalal/anghami-patches/compare/v1.13.0...v1.13.1) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* show picked lyrics and persist provider selection ([f94b4e8](https://github.com/0xgalal/anghami-patches/commit/f94b4e8eedb3842f11fbde0afe48f6222089b2ab))
+
 ## [1.13.0](https://github.com/0xgalal/anghami-patches/compare/v1.12.1...v1.13.0) (2026-11-20)
 
 ### ✨ New Features
