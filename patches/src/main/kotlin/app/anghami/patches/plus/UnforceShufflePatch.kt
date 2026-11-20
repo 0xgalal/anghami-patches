@@ -255,11 +255,15 @@ val unforceShufflePatch = bytecodePatch(
         // A rebuilt queue inherits shuffle from the queue it was copied from
         // via `commonFillPlayQueue` (used by getCopy/getPerfectCopy when the
         // player rebuilds for a previous/next song). Verified in 8.0.28: the
-        // single `iget-boolean v0, p0, ...isShuffleMode` there is followed by
-        // `iput-boolean v0, p1, ...isShuffleMode`. Force the copied value off
-        // so a rebuilt queue always stays in order — returning to a previous
+        // single `iget-boolean v0, p0, ...isShuffleMode` is followed by
+        // `iput-boolean v0, p1, ...isShuffleMode`. NOP the label-free iput so
+        // the rebuilt queue keeps its default (off) — returning to a previous
         // song must not flip shuffle back on and jump to a random next song.
-        // Manual Shuffle (shuffle() -> setShuffleMode) is a separate path.
+        //
+        // LABEL RULE: the iget directly above sits under `:cond_0`, so it must
+        // NOT be replaced — Morphe's remove+add orphans the label onto the
+        // next instruction, which makes the branch skip this setup with a
+        // stale object register and crashes the app on launch.
         run {
             val method = CommonFillPlayQueueFingerprint.method
             val insns = method.implementation!!.instructions
@@ -278,14 +282,16 @@ val unforceShufflePatch = bytecodePatch(
                 "expected exactly 1 isShuffleMode iget in commonFillPlayQueue, found ${gets.size}"
             }
             val dest = (insns[gets[0]] as Instruction22c).registerA
-            val next = insns[gets[0] + 1]
+            val nextIndex = gets[0] + 1
+            val next = insns[nextIndex]
             check(next.opcode == Opcode.IPUT_BOOLEAN && next is Instruction22c &&
                 (next.reference as? FieldReference)?.name == "isShuffleMode" &&
                 next.registerA == dest
             ) {
                 "expected matching isShuffleMode iput after the iget in commonFillPlayQueue"
             }
-            method.replaceInstructions(gets[0], "const/4 v$dest, 0x0")
+            // The iput has no branch label on it; nopping it is verifier-safe.
+            method.replaceInstructions(nextIndex, "nop")
         }
     }
 }
