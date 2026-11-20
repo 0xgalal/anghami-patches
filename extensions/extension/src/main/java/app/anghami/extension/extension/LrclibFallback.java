@@ -1862,8 +1862,14 @@ public final class LrclibFallback {
      */
     static List<String[]> waterfallPairs(String title, String artist) {
         List<String[]> pairs = new ArrayList<String[]>();
-        addWaterfallPair(pairs, normalize(title, true), normalize(artist, true));
-        addWaterfallPair(pairs, normalize(title, false), normalize(artist, false));
+        // Always strip parentheticals from the song title: LRCLIB stores the
+        // clean title, so "Song (Live)", "Song (feat. X)" and "Song [Remix]"
+        // must never be sent as-is. Keep both artist variants (plain and
+        // paren-stripped) because the artist sometimes carries a suffix the
+        // track does not.
+        String track = normalize(title, true);
+        addWaterfallPair(pairs, track, normalize(artist, true));
+        addWaterfallPair(pairs, track, normalize(artist, false));
         return pairs;
     }
 

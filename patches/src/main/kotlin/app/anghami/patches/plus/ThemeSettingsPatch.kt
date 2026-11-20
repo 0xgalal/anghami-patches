@@ -3,6 +3,9 @@ package app.anghami.patches.plus
 import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
 import app.morphe.patcher.patch.bytecodePatch
 import app.anghami.patches.shared.Constants.COMPATIBILITY_ANGHAMI_8_0_28
+import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction3rc
+import com.android.tools.smali.dexlib2.immutable.reference.ImmutableMethodReference
 
 private const val THEME_HELPER = "Lapp/anghami/extension/extension/ThemeManager;"
 
@@ -28,13 +31,32 @@ val themeSettingsPatch = bytecodePatch(
     dependsOn(lyricsFallbackPatch)
 
     execute {
-        // Register lifecycle callbacks once, at app startup. p0 is the
-        // Application; the static call uses no local registers.
-        ThemeApplicationOnCreateFingerprint.method.addInstructions(
+        // Register lifecycle callbacks once, at app startup. AnghamiApplication.onCreate
+        // declares .locals 54 (registerCount 55), so `this` lives in v54 — beyond
+        // the 16-register limit of inline `invoke-static` (35c). Morphe's inline
+        // smali compiler fails there with "classDef is null", so build an
+        // `invoke-static/range` (3rc) instruction directly instead.
+        val appOnCreate = ThemeApplicationOnCreateFingerprint.method
+        val thisRegister = appOnCreate.implementation!!.registerCount -
+            appOnCreate.parameters.size - 1
+        check(thisRegister >= 0) {
+            "could not resolve the this register in AnghamiApplication.onCreate"
+        }
+        appOnCreate.addInstructions(
             0,
-            """
-                invoke-static {p0}, $THEME_HELPER->register(Landroid/app/Application;)V
-            """
+            listOf(
+                BuilderInstruction3rc(
+                    Opcode.INVOKE_STATIC_RANGE,
+                    thisRegister,
+                    1,
+                    ImmutableMethodReference(
+                        THEME_HELPER,
+                        "register",
+                        listOf("Landroid/app/Application;"),
+                        "V",
+                    ),
+                ),
+            ),
         )
 
         // Remember the Settings Activity and theme its chrome.

@@ -16,11 +16,18 @@ public class LrclibWaterfallTest {
     }
 
     @Test
-    public void parenStrippedVariantsAddASecondQuery() {
+    public void titleParenthesesAreAlwaysStripped() {
         List<String[]> pairs = LrclibFallback.waterfallPairs("Song (Remix)", "Artist");
-        assertEquals(2, pairs.size());
+        assertEquals(1, pairs.size());
         assertArrayEquals(new String[]{"song", "artist"}, pairs.get(0));
-        assertArrayEquals(new String[]{"song remix", "artist"}, pairs.get(1));
+    }
+
+    @Test
+    public void allTitleParenthesesAreStripped() {
+        List<String[]> pairs = LrclibFallback.waterfallPairs(
+                "Song (feat. Guest) (Live at Tokyo) [Official Video]", "Artist");
+        assertEquals(1, pairs.size());
+        assertArrayEquals(new String[]{"song", "artist"}, pairs.get(0));
     }
 
     @Test
