@@ -88,8 +88,12 @@ and sent for translation when automatic translation is enabled.
 
 Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It pulls in
 the LRCLIB fallback patch it depends on.
-In the player, long-press the **Lyrics** button and enable automatic
-translation. Tap **Provider** to select **OpenRouter**, **OpenCode**, or **xKiro**, then enter
+In the player, a compact **AI** button sits immediately after the native
+**Lyrics** button for one-tap manual translation of the current song. It uses
+your saved provider, key, model, and language; if those are not configured yet,
+it opens the translation settings dialog instead. Long-pressing **Lyrics**
+opens that same dialog to configure automatic translation. Tap **Provider** to
+select **OpenRouter**, **OpenCode**, or **xKiro**, then enter
 that provider's API key, model ID, and target language. Keys and selected models
 are saved separately for each provider.
 
@@ -123,6 +127,26 @@ The auto-translation choice, provider, API keys, models, target language, option
 system prompt, and cached translations are stored in app-private preferences.
 Translations are cached by lyric, provider, model, target language, and system prompt;
 only uncached lyrics are sent to the selected provider.
+
+### Theme section in Settings
+
+**Theme section in Settings** adds a **Theme** row to Anghami's native Settings
+page (next to the Music section). Opening it offers five presets:
+
+| Preset | Look |
+|--------|------|
+| Tokyo Nights | Deep indigo with neon pink and cyan accents |
+| Neon Sunset | Warm dark plum with orange and amber accents |
+| Midnight Ocean | Deep navy with blue and teal accents |
+| Forest Glow | Deep green with mint and lime accents |
+| Rose Quartz | Dark rose with pink and blush accents |
+
+A preset recolors the app chrome (status and navigation bars on every screen)
+and the player surface (root background and the Lyrics / Queue / AI control-row
+accents). It is stored in app-private preferences, so changing it takes effect
+immediately and survives restarts. This is a runtime overlay — the existing
+build-time **Player theme** / **Player theme background** palettes are left
+untouched, so both can be enabled together.
 
 ### 🛠️ Building locally
 
