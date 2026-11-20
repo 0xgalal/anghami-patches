@@ -98,7 +98,9 @@ jobs:
             exit 1
           fi
 
-          ./gradlew generatePatchesList --no-daemon
+          # buildAndroid embeds the patch DEX in the .mpp; generatePatchesList
+          # alone only produces a plain jar, which Morphe sees as zero patches.
+          ./gradlew buildAndroid generatePatchesList --no-daemon
 
           artifact="patches/build/libs/patches-${version}.mpp"
           if [[ ! -f "$artifact" ]]; then
