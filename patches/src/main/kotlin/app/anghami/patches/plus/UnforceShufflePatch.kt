@@ -5,8 +5,10 @@ import app.morphe.patcher.extensions.InstructionExtensions.replaceInstructions
 import app.morphe.patcher.patch.bytecodePatch
 import app.anghami.patches.shared.Constants.COMPATIBILITY_ANGHAMI_8_0_28
 import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.formats.Instruction22c
 import com.android.tools.smali.dexlib2.iface.reference.FieldReference
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
 
 /**
  * Unforces shuffle (v1 scope) and kills the server radio paths.
@@ -252,5 +254,42 @@ val unforceShufflePatch = bytecodePatch(
                 :noexpand_allow
             """
         )
+        // Never re-apply remembered shuffle when a queue is rebuilt. Each of
+        // these fresh-queue builders ends with `setShuffle(sticky)`: going
+        // back to a previous song rebuilds the queue and flips shuffle back
+        // on, so playback jumps to a random "next" song instead of the
+        // previous one. Force `sticky` false at that call by replacing the
+        // boolean argument with const/4 0 right before it, keeping the queue
+        // in order. The manual Shuffle button (shuffle() -> setShuffleMode)
+        // is a separate path and keeps working.
+        // Nops every `PlayQueue.setShuffle(Z)V` call in fresh-queue builders.
+        // `setShuffle(false)` is a no-op, so removing the call is equivalent
+        // to forcing sticky off: a rebuilt queue stays in order instead of
+        // flipping shuffle back on and jumping to a random next song. The
+        // argument setup before each call becomes dead but harmless.
+        for ((fingerprint, label) in listOf(
+            CreatePlayQueueFingerprint to "createPlayQueue",
+            RelatedQueueBuilderFingerprint to "buildRelatedPlayQueue",
+            GenericQueueBuilderFingerprint to "Generic.onNext",
+        )) {
+            val method = fingerprint.method
+            val insns = method.implementation!!.instructions
+            val calls = insns.mapIndexedNotNull { index, ins ->
+                val ref = (ins as? ReferenceInstruction)?.reference as? MethodReference
+                if (ins.opcode == Opcode.INVOKE_VIRTUAL &&
+                    ref?.name == "setShuffle" &&
+                    ref.returnType == "V" &&
+                    ref.parameterTypes.toList() == listOf("Z")
+                ) {
+                    index
+                } else {
+                    null
+                }
+            }
+            check(calls.isNotEmpty()) {
+                "expected at least 1 PlayQueue.setShuffle(Z) call in $label, found none"
+            }
+            calls.forEach { method.replaceInstructions(it, "nop") }
+        }
     }
 }
