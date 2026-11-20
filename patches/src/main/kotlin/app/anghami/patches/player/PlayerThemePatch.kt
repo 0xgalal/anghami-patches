@@ -109,7 +109,7 @@ import app.morphe.patcher.patch.resourcePatch
 val playerThemePatch = resourcePatch(
     name = "Player theme background",
     description = "Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'.",
-    default = true,
+    default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     category("Experimental")

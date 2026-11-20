@@ -1,7 +1,6 @@
 package app.anghami.patches.plus
 
 import app.morphe.patcher.Fingerprint
-import app.morphe.patcher.fieldAccess
 import app.morphe.patcher.methodCall
 import app.morphe.patcher.opcode
 import app.morphe.patcher.string
@@ -252,27 +251,6 @@ object RadioShuffleMessageFingerprint : Fingerprint(
     parameters = listOf(),
     filters = listOf(
         string("shuffle"),
-    )
-)
-
-/**
- * Queue-copy fill (Anghami 8.0.28, verified in 8.0.28: PlayQueue
- * `commonFillPlayQueue(PlayQueue)V`, private). Called by `getCopy` and
- * `getPerfectCopy` when the player rebuilds a queue for a previous/next song.
- * It copies `isShuffleMode` from the source queue to the new one, which is
- * what re-enables shuffle on a rebuilt queue. No string filter in the method;
- * class + name + signature + the shuffle-mode field access pin it.
- */
-object CommonFillPlayQueueFingerprint : Fingerprint(
-    definingClass = "Lcom/anghami/odin/playqueue/PlayQueue;",
-    name = "commonFillPlayQueue",
-    // No accessFlags (private in 8.0.28; exact-int matching brittle).
-    returnType = "V",
-    parameters = listOf("Lcom/anghami/odin/playqueue/PlayQueue;"),
-    filters = listOf(
-        fieldAccess(
-            smali = "Lcom/anghami/odin/playqueue/PlayQueue;->isShuffleMode:Z"
-        ),
     )
 )
 
