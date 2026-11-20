@@ -2296,10 +2296,10 @@ public final class LrclibFallback {
     }
 
     /**
-     * Paint a manually picked result immediately. This deliberately skips
-     * renderOnMain's idempotence check: search status lines already replaced
-     * the screen, so the result must paint even if its text matches what was
-     * displayed before the search started.
+     * Paint a manually picked result through the same path that renders every
+     * other lyric source. Search status lines already replaced the screen, so
+     * drop the last-render key first or the result could be skipped when its
+     * text matches what was shown before the search.
      */
     private static void applyPickedLyrics(Context ctx, Object song, Object callback,
                                           Result picked) {
@@ -2314,28 +2314,16 @@ public final class LrclibFallback {
             writePositiveCache(appCtx, cacheKey(readSong(song)), picked);
             remember(picked.queryUsed, picked.source, picked.plain, picked.synced);
 
-            Class<?> responseClass =
-                    Class.forName("com.anghami.ghost.api.response.LyricsResponse");
-            Object response = responseClass.newInstance();
-            setLineField(response, "songId", getFieldUp(song, "id"));
-            setLineField(response, "truncated", false);
-            boolean synced = picked.synced != null && !picked.synced.isEmpty();
-            setLineField(response, "isSynced", synced);
-            List<Object> lines = buildLines(response, picked.plain, picked.synced);
-            setLineField(response, "lyricsSynced", synced ? lines : null);
-            setLineField(response, "lyricsUnsynced", synced ? null : picked.plain);
-
             Object latest = callbackForSong(song);
             if (latest == null) latest = callback;
-            invokeRender(latest, song, lines, response);
-
-            // Automatic translation runs from the same source bookkeeping.
-            if (synced) {
-                List<Line> sourceLines = parseLrc(picked.synced);
-                if (!sourceLines.isEmpty()) {
-                    setTranslationSource(readSong(song), song, latest, sourceLines, true);
-                }
+            synchronized (LrclibFallback.class) {
+                renderedKeys.remove(latest);
             }
+            // renderOnMain builds the response the way the native renderer
+            // expects, resolves the live callback again and starts automatic
+            // translation for the picked source.
+            renderOnMain(appCtx, song, latest, picked.plain, picked.synced,
+                    "picked:" + picked.source, true);
             Log.d(TAG, "picked lyrics applied from " + picked.source);
         } catch (Throwable t) {
             Log.d(TAG, "could not apply picked lyrics: " + t);
