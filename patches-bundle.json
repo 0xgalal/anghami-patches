@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T10:28:10",
-  "description": "## [1.13.4](https://github.com/0xgalal/anghami-patches/compare/v1.13.3...v1.13.4) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* render picked lyrics through the standard render path ([09eb8f7](https://github.com/0xgalal/anghami-patches/commit/09eb8f7793cefa07b3e08f85a6d75693bd6ee2a2))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.4/patches-1.13.4.mpp",
+  "created_at": "2026-11-20T10:57:36",
+  "description": "## [1.13.5](https://github.com/0xgalal/anghami-patches/compare/v1.13.4...v1.13.5) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* stop shuffle re-applying when a queue is rebuilt ([6a5db47](https://github.com/0xgalal/anghami-patches/commit/6a5db4702504ea1ea60a49f03cb9292d5da11406))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.5/patches-1.13.5.mpp",
   "signature_download_url": "",
-  "version": "1.13.4"
+  "version": "1.13.5"
 }

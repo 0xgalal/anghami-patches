@@ -1,3 +1,9 @@
+## [1.13.5](https://github.com/0xgalal/anghami-patches/compare/v1.13.4...v1.13.5) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* stop shuffle re-applying when a queue is rebuilt ([6a5db47](https://github.com/0xgalal/anghami-patches/commit/6a5db4702504ea1ea60a49f03cb9292d5da11406))
+
 ## [1.13.4](https://github.com/0xgalal/anghami-patches/compare/v1.13.3...v1.13.4) (2026-11-20)
 
 ### 🐛 Bug Fixes
