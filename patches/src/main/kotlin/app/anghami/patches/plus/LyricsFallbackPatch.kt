@@ -212,12 +212,14 @@ val lyricsFallbackPatch = bytecodePatch(
  * Capture at the renderer covers API and StoredLyrics/cache responses.
  * With automatic translation enabled, source lyrics stay hidden until the
  * original and translation can be rendered together.
- * Long-pressing the player's Lyrics toggle opens the auto-translation dialog.
+ * Long-pressing the player's Lyrics toggle opens the auto-translation dialog;
+ * the compact AI button installed next to it translates the current song in
+ * one tap using the saved settings.
  */
 @Suppress("unused")
 val lyricsOpenRouterTranslationPatch = bytecodePatch(
     name = "AI lyrics translation · OpenRouter / OpenCode / xKiro",
-    description = "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press the player Lyrics button to configure it.",
+    description = "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. A compact AI button after the player Lyrics button translates the current song on tap; long-press Lyrics to configure.",
     default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
@@ -278,11 +280,14 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
         )
 
         // The Lyrics button uses a native View click listener. Add a
-        // separate long-click listener without changing its ordinary click.
+        // separate long-click listener without changing its ordinary click,
+        // plus the one-tap manual translation control placed after it.
+        // Both are single static calls at method entry (label-safe).
         PlayerLyricsButtonResumeFingerprint.method.addInstructions(
             0,
             """
                 invoke-static {p0}, $FALLBACK_HELPER->installLyricsButtonLongPress(Ljava/lang/Object;)V
+                invoke-static {p0}, $FALLBACK_HELPER->installManualTranslateButton(Ljava/lang/Object;)V
             """
         )
     }

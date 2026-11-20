@@ -70,6 +70,9 @@ import java.util.regex.Pattern;
  *   dialog when the player's Lyrics button is long-pressed; its "Lyrics
  *   options" button opens {@link #showOptionsForSong} for manual LRCLIB
  *   search, retry, synced/plain toggle and cache clearing.
+ * - {@link #installManualTranslateButton} installs a compact AI control after
+ *   the player's Lyrics button for one-tap manual translation of the current
+ *   song using the saved provider/model/language.
  *
  * All app classes are touched via reflection: the extension compiles
  * without the app on the classpath. Any failure is caught and logged;
@@ -295,6 +298,146 @@ public final class LrclibFallback {
             applyLyricsButtonLabel((View) targetObj);
         } catch (Throwable t) {
             Log.d(TAG, "installLyricsButtonLongPress failed: " + t);
+        }
+    }
+
+    /** Tag used to keep the injected manual-translate control idempotent. */
+    private static final String AI_BUTTON_TAG = "ai_translate_button";
+
+    /**
+     * Adds a compact "AI" control immediately after the player's native
+     * Lyrics button (spacer view installed between Lyrics and Queue in the
+     * secondary-controls row), wired to a one-tap manual translation of the
+     * current song. Safe to call on every onResume.
+     */
+    public static void installManualTranslateButton(Object fragmentObj) {
+        try {
+            if (fragmentObj == null) return;
+            Object targetObj = getFieldUp(fragmentObj, "V"); // fl_lyrics
+            if (!(targetObj instanceof View)) return;
+            View lyrics = (View) targetObj;
+            ViewParent parent = lyrics.getParent();
+            if (!(parent instanceof ViewGroup)) return;
+            final ViewGroup group = (ViewGroup) parent;
+
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (AI_BUTTON_TAG.equals(child.getTag())) {
+                    return; // already installed by an earlier onResume
+                }
+            }
+            int lyricsIndex = -1;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (group.getChildAt(i) == lyrics) {
+                    lyricsIndex = i;
+                    break;
+                }
+            }
+            if (lyricsIndex < 0) return;
+
+            Context ctx = lyrics.getContext();
+            if (ctx == null) return;
+            TextView button = new TextView(ctx);
+            button.setTag(AI_BUTTON_TAG);
+            button.setText("AI");
+            button.setTextColor(Color.rgb(235, 238, 243));
+            button.setTextSize(11f);
+            button.setGravity(Gravity.CENTER);
+            button.setClickable(true);
+            button.setFocusable(true);
+            final WeakReference<Object> fragmentRef = new WeakReference<Object>(fragmentObj);
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    translateNowFromPlayer(view.getContext(), fragmentRef.get());
+                }
+            });
+
+            ViewGroup.LayoutParams params = buildButtonParams(ctx, lyrics, group);
+            if (params != null) {
+                button.setLayoutParams(params);
+            }
+            group.addView(button, lyricsIndex + 1);
+        } catch (Throwable t) {
+            Log.d(TAG, "installManualTranslateButton failed: " + t);
+        }
+    }
+
+    /**
+     * Clones the Lyrics view's ConstraintLayout params so the new control
+     * sits between Lyrics and Queue instead of overlapping either one.
+     */
+    private static ViewGroup.LayoutParams buildButtonParams(Context ctx, View lyrics,
+                                                             ViewGroup group) {
+        try {
+            int queueId = ctx.getResources().getIdentifier("btn_queue", "id",
+                    ctx.getPackageName());
+            View queue = queueId == 0 ? null : group.findViewById(queueId);
+            ViewGroup.LayoutParams source = lyrics.getLayoutParams();
+            ViewGroup.LayoutParams params;
+            if (source != null && source.getClass().getConstructor(source.getClass()) != null) {
+                params = source.getClass().getConstructor(source.getClass()).newInstance(source);
+            } else {
+                params = new ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT);
+            }
+            setIntField(params, "startToStart", -1);
+            setIntField(params, "startToEnd", lyrics.getId());
+            setIntField(params, "endToEnd", -1);
+            setIntField(params, "endToStart", queue != null ? queue.getId() : -1);
+            // Vertical constraints and margins are copied from the Lyrics view.
+            params.width = queue != null ? 0 : ViewGroup.LayoutParams.WRAP_CONTENT;
+            params.height = 0;
+            return params;
+        } catch (Throwable t) {
+            Log.d(TAG, "buildButtonParams failed: " + t);
+            return null;
+        }
+    }
+
+    private static void setIntField(Object target, String name, int value) {
+        try {
+            Field field = findField(target.getClass(), name);
+            if (field != null) {
+                field.setAccessible(true);
+                field.setInt(target, value);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Field findField(Class<?> type, String name) {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(name);
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    /** One-tap translation: translate immediately when settings exist, else configure. */
+    private static void translateNowFromPlayer(Context ctx, Object fragmentObj) {
+        try {
+            if (ctx == null) return;
+            Object song = currentSongFromPlayer(fragmentObj);
+            TranslationSettings settings = readTranslationSettings(ctx);
+            SourceSnapshot snapshot = song == null ? null : translationSourceFor(song);
+            boolean configured = settings.provider != null
+                    && !trimOrEmpty(settings.apiKey).isEmpty()
+                    && !trimOrEmpty(settings.model).isEmpty()
+                    && !trimOrEmpty(settings.language).isEmpty();
+            if (snapshot == null || snapshot.lines.isEmpty() || !configured) {
+                showTranslationDialog(ctx, song, fragmentObj, false);
+                return;
+            }
+            translateAndRender(ctx, song, snapshot, settings.provider, settings.apiKey,
+                    settings.model, settings.language, settings.systemPrompt, true);
+        } catch (Throwable t) {
+            Log.d(TAG, "translateNowFromPlayer failed: " + t);
         }
     }
 
@@ -1125,14 +1268,14 @@ public final class LrclibFallback {
         boolean fr = "fr".equalsIgnoreCase(lang);
 
         if ("no_result".equals(key)) {
-            if (ar) return "لم يتم العثور على كلمات.\nافتح الإعدادات > الكلمات للبحث يدويًا.";
-            if (fr) return "Paroles introuvables.\nOuvrez Paramètres > Paroles pour les rechercher manuellement.";
-            return "No lyrics found.\nOpen Settings > Lyrics to search manually.";
+            if (ar) return "لم يتم العثور على كلمات.\nاضغط مطولاً على زر الكلمات لخيارات البحث.";
+            if (fr) return "Paroles introuvables.\nAppuyez longuement sur Paroles pour les options de recherche.";
+            return "No lyrics found.\nLong-press the Lyrics button for search options.";
         }
         if ("guide_teaser".equals(key)) {
-            if (ar) return "افتح الإعدادات > الكلمات لخيارات الكلمات.";
-            if (fr) return "Ouvrez Paramètres > Paroles pour les options des paroles.";
-            return "Open Settings > Lyrics for lyrics options.";
+            if (ar) return "اضغط مطولاً على زر الكلمات لخيارات الكلمات.";
+            if (fr) return "Appuyez longuement sur Paroles pour les options des paroles.";
+            return "Long-press the Lyrics button for lyrics options.";
         }
         if ("searching".equals(key)) {
             if (ar) return "جارٍ البحث في LRCLIB…";
