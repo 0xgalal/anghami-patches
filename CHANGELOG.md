@@ -1,3 +1,9 @@
+## [1.13.6](https://github.com/0xgalal/anghami-patches/compare/v1.13.5...v1.13.6) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* force shuffle off when a queue is copied ([c8c3056](https://github.com/0xgalal/anghami-patches/commit/c8c3056df3308b399b752cf7e4f6149fc8dba5b3))
+
 ## [1.13.5](https://github.com/0xgalal/anghami-patches/compare/v1.13.4...v1.13.5) (2026-11-20)
 
 ### 🐛 Bug Fixes

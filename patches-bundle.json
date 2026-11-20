@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T10:57:36",
-  "description": "## [1.13.5](https://github.com/0xgalal/anghami-patches/compare/v1.13.4...v1.13.5) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* stop shuffle re-applying when a queue is rebuilt ([6a5db47](https://github.com/0xgalal/anghami-patches/commit/6a5db4702504ea1ea60a49f03cb9292d5da11406))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.5/patches-1.13.5.mpp",
+  "created_at": "2026-11-20T11:12:40",
+  "description": "## [1.13.6](https://github.com/0xgalal/anghami-patches/compare/v1.13.5...v1.13.6) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* force shuffle off when a queue is copied ([c8c3056](https://github.com/0xgalal/anghami-patches/commit/c8c3056df3308b399b752cf7e4f6149fc8dba5b3))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.6/patches-1.13.6.mpp",
   "signature_download_url": "",
-  "version": "1.13.5"
+  "version": "1.13.6"
 }
