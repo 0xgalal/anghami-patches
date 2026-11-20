@@ -6,6 +6,7 @@ import android.app.Application;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -21,25 +22,33 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * Runtime theme picker for the whole app, including the player.
  *
  * The shipped patch set bakes one player palette into resources/dex at build
  * time. This manager deliberately stays out of that bytecode: it applies a
- * preset at runtime from SharedPreferences, so all five choices work from a
- * single install. Each preset has a dark palette (night mode) and a brighter
- * light palette (day mode), selected from the current uiMode.
+ * preset at runtime from SharedPreferences, so every choice works from a
+ * single install. Five presets have a dark palette (night mode) and a brighter
+ * light palette (day mode), selected from the current uiMode. The sixth choice,
+ * Default, applies no overlay at all and keeps/restores the app's baseline
+ * colors in both modes.
  *
  * Application.onCreate registers lifecycle callbacks so the window, status
  * and navigation bars follow the selected palette on every screen, and the
  * entire Android view hierarchy under {@code android.R.id.content} is walked
  * to recolor view backgrounds, text, buttons and cards. The player fragment's
  * onResume hook calls {@link #applyPlayerTheme(Object)} for the
- * player-specific tint. Compose-owned screens cannot be recolored through
- * the view tree; their window colors still follow the theme.
+ * player-specific tint. Before any view/window color is changed, its original
+ * value is recorded in a WeakHashMap; picking Default restores those values
+ * on the spot. Compose-owned screens cannot be recolored through the view
+ * tree; their window colors still follow the theme.
  *
  * Any failure is caught and logged — theming must never break the host app.
  */
@@ -54,6 +63,10 @@ public final class ThemeManager {
     /** dummy_tag_1: empty, unused stock string repurposed to "THEME" by themeTitleResourcePatch. */
     private static final int ROW_TITLE_RES = 0x7f130b07;
     private static final int ROW_ICON_RES = 0x7f080810; // ico_settings_music_settings
+    /** Appended last on purpose: stored ids 0..4 from older builds stay valid. */
+    static final int DEFAULT_ID = 5;
+    /** Placeholder palette for Default; never applied (apply sites skip Default). */
+    static final int NO_OVERRIDE = 0;
 
     private static volatile WeakReference<Activity> settingsActivity =
             new WeakReference<Activity>(null);
@@ -93,7 +106,11 @@ public final class ThemeManager {
                 new Palette(0xfff3faef, 0xff2e7d32, 0xff558b2f, 0xff11240f, 0xffffffff)),
         ROSE_QUARTZ(
                 new Palette(0xff1a0f14, 0xffff7eb6, 0xffffc8dd, 0xfffdf0f6, 0xff1a0f14),
-                new Palette(0xfffff4f8, 0xffad1457, 0xff880e4f, 0xff2a101a, 0xffffffff));
+                new Palette(0xfffff4f8, 0xffad1457, 0xff880e4f, 0xff2a101a, 0xffffffff)),
+        // No overlay. The all-zero palette is a sentinel and is never applied.
+        DEFAULT(
+                new Palette(NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE),
+                new Palette(NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE));
 
         final Palette dark;
         final Palette light;
@@ -119,7 +136,39 @@ public final class ThemeManager {
             "Midnight Ocean",
             "Forest Glow",
             "Rose Quartz",
+            "Default",
     };
+
+    // ---- original-color snapshots ---------------------------------------
+    // Weak keys keep detached views/activities collectable. Values hold only
+    // immutable color data (never a Drawable that points back at a view),
+    // except the window background Drawable, which is explicitly cleared on
+    // activity destruction and on restore.
+
+    /** Original colors of a single themed view. */
+    private static final class ViewOriginal {
+        Integer backgroundColor;        // captured only for flat ColorDrawables
+        boolean backgroundWasNull;       // captured for buttons/toolbars with no background
+        boolean hadTextColors;
+        ColorStateList textColors;
+        boolean hadBackgroundTint;
+        ColorStateList backgroundTint;
+        boolean hadCardColors;
+        ColorStateList cardColors;
+    }
+
+    /** Original window colors of a single themed Activity. */
+    private static final class WindowOriginal {
+        int statusBarColor;
+        int navigationBarColor;
+        boolean hadBackground;
+        Drawable background;
+    }
+
+    private static final Map<View, ViewOriginal> viewOriginals =
+            Collections.synchronizedMap(new WeakHashMap<View, ViewOriginal>());
+    private static final Map<Activity, WindowOriginal> windowOriginals =
+            Collections.synchronizedMap(new WeakHashMap<Activity, WindowOriginal>());
 
     private ThemeManager() {
     }
@@ -180,6 +229,7 @@ public final class ThemeManager {
 
                 @Override
                 public void onActivityDestroyed(Activity activity) {
+                    forgetWindowOriginals(activity);
                 }
             });
             registeredApp = app;
@@ -256,10 +306,11 @@ public final class ThemeManager {
     /** Whole-app chrome: window, status/navigation bars and the view hierarchy. */
     public static void applyTheme(Activity activity) {
         try {
-            if (activity == null) return;
+            if (activity == null || !shouldOverride(loadThemeId(activity))) return;
             Palette preset = paletteFor(activity);
             Window window = activity.getWindow();
             if (window != null) {
+                rememberWindow(window, activity);
                 window.setStatusBarColor(preset.background);
                 window.setNavigationBarColor(preset.background);
                 try {
@@ -284,7 +335,10 @@ public final class ThemeManager {
             Object rootObj = getFieldUp(fragmentObj, "e"); // player/ui/d.e root view
             if (!(rootObj instanceof View)) return;
             View root = (View) rootObj;
+            if (!shouldOverride(loadThemeId(root.getContext()))) return;
             Palette preset = paletteFor(root.getContext());
+            ViewOriginal original = originalFor(root);
+            rememberBackground(root, root.getBackground(), original);
             root.setBackgroundColor(preset.background);
             Object controlsObj = getFieldUp(fragmentObj, "V"); // fl_lyrics
             if (controlsObj instanceof View) {
@@ -310,6 +364,11 @@ public final class ThemeManager {
         }
     }
 
+    /** Default (id 5) is the only preset that must not touch any color. */
+    static boolean shouldOverride(int id) {
+        return id != DEFAULT_ID;
+    }
+
     private static Palette paletteFor(Context ctx) {
         return Preset.fromId(loadThemeId(ctx)).forMode(isNight(ctx));
     }
@@ -324,6 +383,152 @@ public final class ThemeManager {
             return true;
         }
     }
+
+    // ---- original-color bookkeeping ------------------------------------
+
+    private static ViewOriginal originalFor(View view) {
+        synchronized (viewOriginals) {
+            ViewOriginal original = viewOriginals.get(view);
+            if (original == null) {
+                original = new ViewOriginal();
+                viewOriginals.put(view, original);
+            }
+            return original;
+        }
+    }
+
+    private static void rememberBackground(View view, Drawable background, ViewOriginal original) {
+        if (original.backgroundColor != null || original.backgroundWasNull) return;
+        if (background instanceof ColorDrawable) {
+            original.backgroundColor = ((ColorDrawable) background).getColor();
+        } else if (background == null) {
+            original.backgroundWasNull = true;
+        }
+        // Complex drawables are never replaced, so nothing to remember.
+    }
+
+    private static void rememberText(TextView view, ViewOriginal original) {
+        if (original.hadTextColors) return;
+        original.textColors = view.getTextColors();
+        original.hadTextColors = true;
+    }
+
+    private static void rememberTint(View view, ViewOriginal original) {
+        if (original.hadBackgroundTint) return;
+        original.backgroundTint = view.getBackgroundTintList();
+        original.hadBackgroundTint = true;
+    }
+
+    private static void rememberCard(View view, ViewOriginal original) {
+        if (original.hadCardColors) return;
+        try {
+            Method getter = view.getClass().getMethod("getCardBackgroundColor");
+            original.cardColors = (ColorStateList) getter.invoke(view);
+            original.hadCardColors = true;
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void rememberWindow(Window window, Activity activity) {
+        synchronized (windowOriginals) {
+            if (windowOriginals.containsKey(activity)) return;
+            WindowOriginal original = new WindowOriginal();
+            original.statusBarColor = window.getStatusBarColor();
+            original.navigationBarColor = window.getNavigationBarColor();
+            // Window.getBackground() is hidden API; PhoneWindow installs the
+            // window background on the decor view, which is public API.
+            View decor = window.getDecorView();
+            Drawable background = decor != null ? decor.getBackground() : null;
+            original.hadBackground = background != null;
+            original.background = background;
+            windowOriginals.put(activity, original);
+        }
+    }
+
+    private static void forgetWindowOriginals(Activity activity) {
+        synchronized (windowOriginals) {
+            windowOriginals.remove(activity);
+        }
+    }
+
+    /**
+     * Restore the stock look immediately after Default is picked. Snapshots
+     * are taken only while an override is actually written, and are cleared
+     * after restoring so a later theme choice re-snapshots the stock state.
+     */
+    static void restoreStockColors() {
+        try {
+            List<Map.Entry<View, ViewOriginal>> views;
+            synchronized (viewOriginals) {
+                views = new ArrayList<Map.Entry<View, ViewOriginal>>(viewOriginals.entrySet());
+                viewOriginals.clear();
+            }
+            for (Map.Entry<View, ViewOriginal> entry : views) {
+                View view = entry.getKey();
+                ViewOriginal original = entry.getValue();
+                try {
+                    Drawable current = view.getBackground();
+                    if (original.backgroundColor != null) {
+                        // Only undo our own flat-color override.
+                        if (current instanceof ColorDrawable) {
+                            view.setBackgroundColor(original.backgroundColor);
+                        }
+                    } else if (original.backgroundWasNull
+                            && (current == null || current instanceof ColorDrawable)) {
+                        view.setBackground(null);
+                    }
+                } catch (Throwable ignored) {
+                }
+                try {
+                    if (original.hadBackgroundTint) {
+                        view.setBackgroundTintList(original.backgroundTint);
+                    }
+                } catch (Throwable ignored) {
+                }
+                try {
+                    if (original.hadCardColors && original.cardColors != null) {
+                        Method setter = view.getClass().getMethod(
+                                "setCardBackgroundColor", ColorStateList.class);
+                        setter.invoke(view, original.cardColors);
+                    }
+                } catch (Throwable ignored) {
+                }
+                try {
+                    if (original.hadTextColors && view instanceof TextView) {
+                        ((TextView) view).setTextColor(original.textColors);
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+
+            List<Map.Entry<Activity, WindowOriginal>> windows;
+            synchronized (windowOriginals) {
+                windows = new ArrayList<Map.Entry<Activity, WindowOriginal>>(
+                        windowOriginals.entrySet());
+                windowOriginals.clear();
+            }
+            for (Map.Entry<Activity, WindowOriginal> entry : windows) {
+                try {
+                    Window window = entry.getKey().getWindow();
+                    WindowOriginal original = entry.getValue();
+                    if (window == null) continue;
+                    window.setStatusBarColor(original.statusBarColor);
+                    window.setNavigationBarColor(original.navigationBarColor);
+                    View decor = window.getDecorView();
+                    Drawable current = decor != null ? decor.getBackground() : null;
+                    if (current == null || current instanceof ColorDrawable) {
+                        window.setBackgroundDrawable(original.hadBackground
+                                ? original.background : null);
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "restoreStockColors failed: " + t);
+        }
+    }
+
+    // ---- tinting --------------------------------------------------------
 
     /**
      * Recursively recolor the Android view tree. Deliberately conservative:
@@ -342,6 +547,8 @@ public final class ThemeManager {
             // safe to replace; selectors, ripples and images are preserved.
             if (background instanceof ColorDrawable
                     || (background == null && (view instanceof Button || keySurface))) {
+                ViewOriginal original = originalFor(view);
+                rememberBackground(view, background, original);
                 view.setBackgroundColor(
                         view instanceof Button ? preset.accent : preset.background);
             }
@@ -349,10 +556,14 @@ public final class ThemeManager {
         }
         try {
             if (className.contains("CardView")) {
+                ViewOriginal original = originalFor(view);
+                rememberCard(view, original);
                 Method method = view.getClass().getMethod("setCardBackgroundColor", Integer.TYPE);
                 method.invoke(view, preset.background);
             }
             if (view instanceof Button) {
+                ViewOriginal original = originalFor(view);
+                rememberTint(view, original);
                 view.setBackgroundTintList(
                         android.content.res.ColorStateList.valueOf(preset.accent));
             }
@@ -361,6 +572,8 @@ public final class ThemeManager {
         try {
             if (view instanceof TextView) {
                 TextView text = (TextView) view;
+                ViewOriginal original = originalFor(view);
+                rememberText(text, original);
                 text.setTextColor(view instanceof Button
                         ? preset.onAccent
                         : (view.isClickable() ? preset.accent : preset.foreground));
@@ -383,8 +596,14 @@ public final class ThemeManager {
     }
 
     private static void tintControlsRecursive(View view, Palette preset) {
-        if (view instanceof TextView) {
-            ((TextView) view).setTextColor(preset.accent);
+        try {
+            if (view instanceof TextView) {
+                TextView text = (TextView) view;
+                ViewOriginal original = originalFor(view);
+                rememberText(text, original);
+                text.setTextColor(preset.accent);
+            }
+        } catch (Throwable ignored) {
         }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
@@ -407,6 +626,11 @@ public final class ThemeManager {
                                 public void onClick(DialogInterface dialog, int which) {
                                     selected[0] = which;
                                     saveThemeId(ctx, which);
+                                    if (!shouldOverride(which)) {
+                                        // Undo the current overlay on every live
+                                        // screen/window before skipping future tints.
+                                        restoreStockColors();
+                                    }
                                     applyThemeForContext(ctx);
                                     refreshPlayerTheme();
                                     dialog.dismiss();

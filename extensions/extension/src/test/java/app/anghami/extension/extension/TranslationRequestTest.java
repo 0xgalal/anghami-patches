@@ -27,6 +27,8 @@ public class TranslationRequestTest {
     private static final ArrayDeque<Response> responses = new ArrayDeque<Response>();
     private static final List<Connection> connections = new ArrayList<Connection>();
     private static Method request;
+    private static Method requestWithAccount;
+    private static Method fetchWithCredentials;
     private static Method parseLyrics;
     private static Method parsePlainLyrics;
     private static Method isTranslationSourceResult;
@@ -46,6 +48,13 @@ public class TranslationRequestTest {
                 TranslationProvider.class, String.class, String.class, String.class,
                 String.class, String.class, List.class);
         request.setAccessible(true);
+        requestWithAccount = LrclibFallback.class.getDeclaredMethod("requestTranslation",
+                TranslationProvider.class, String.class, String.class, String.class,
+                String.class, String.class, String.class, List.class);
+        requestWithAccount.setAccessible(true);
+        fetchWithCredentials = LrclibFallback.class.getDeclaredMethod(
+                "fetchTranslationModels", TranslationProvider.class, String.class, String.class);
+        fetchWithCredentials.setAccessible(true);
         parseLyrics = LrclibFallback.class.getDeclaredMethod("parseLrc", String.class);
         parseLyrics.setAccessible(true);
         parsePlainLyrics = LrclibFallback.class.getDeclaredMethod("plainLines", String.class);
@@ -62,19 +71,27 @@ public class TranslationRequestTest {
     }
 
     @Test
-    public void fetchesEachPublicCatalogWithoutSendingTranslationCredentials() throws Exception {
+    public void fetchesEachCatalogWithOnlyCloudflareRequiringCredentials() throws Exception {
         Method fetch = LrclibFallback.class.getDeclaredMethod(
                 "fetchTranslationModels", TranslationProvider.class);
         fetch.setAccessible(true);
         for (TranslationProvider provider : TranslationProvider.values()) {
-            String catalog = provider == TranslationProvider.XKIRO
-                    ? "{\"object\":\"list\",\"data\":[{\"id\":\"mistralai/mistral-small-2603\","
-                    + "\"display_name\":\"Mistral Small 4\",\"modality\":\"chat\","
-                    + "\"access_tier\":\"free\"}]}"
-                    : "{\"data\":[{\"id\":\"provider/model:free\",\"name\":\"Free\"},"
-                    + "{\"id\":\"glm-5.3-flash\",\"name\":\"GLM\",\"type\":\"chat\"}]}";
+            String catalog;
+            if (provider == TranslationProvider.CLOUDFLARE) {
+                catalog = "{\"success\":true,\"result\":["
+                        + "{\"id\":\"@cf/meta/llama-3.1-8b-instruct\",\"name\":\"Llama\"}]}";
+            } else if (provider == TranslationProvider.XKIRO) {
+                catalog = "{\"object\":\"list\",\"data\":[{\"id\":\"mistralai/mistral-small-2603\","
+                        + "\"display_name\":\"Mistral Small 4\",\"modality\":\"chat\","
+                        + "\"access_tier\":\"free\"}]}";
+            } else {
+                catalog = "{\"data\":[{\"id\":\"provider/model:free\",\"name\":\"Free\"},"
+                        + "{\"id\":\"glm-5.3-flash\",\"name\":\"GLM\",\"type\":\"chat\"}]}";
+            }
             responses.add(new Response(200, catalog));
-            List<?> models = (List<?>) fetch.invoke(null, provider);
+            List<?> models = provider == TranslationProvider.CLOUDFLARE
+                    ? (List<?>) fetchWithCredentials.invoke(null, provider, "acct123", "cf-token")
+                    : (List<?>) fetch.invoke(null, provider);
             assertFalse(models.isEmpty());
             Connection connection = connections.get(connections.size() - 1);
             String expectedUrl;
@@ -82,12 +99,18 @@ public class TranslationRequestTest {
                 expectedUrl = "https://openrouter.ai/api/v1/models";
             } else if (provider == TranslationProvider.OPENCODE) {
                 expectedUrl = "https://opencode.ai/inference/v1/models";
-            } else {
+            } else if (provider == TranslationProvider.XKIRO) {
                 expectedUrl = "https://api.xkiro.com/v1/models";
+            } else {
+                expectedUrl = "https://api.cloudflare.com/client/v4/accounts/acct123/ai/models";
             }
             assertEquals(expectedUrl, connection.getURL().toString());
             assertEquals("GET", connection.getRequestMethod());
-            assertNull(connection.getRequestProperty("Authorization"));
+            if (provider == TranslationProvider.CLOUDFLARE) {
+                assertEquals("Bearer cf-token", connection.getRequestProperty("Authorization"));
+            } else {
+                assertNull(connection.getRequestProperty("Authorization"));
+            }
             assertTrue(connection.disconnected);
         }
     }
@@ -95,6 +118,7 @@ public class TranslationRequestTest {
     @Test
     public void routesEachProviderWithItsSelectedKeyAndModel() throws Exception {
         for (TranslationProvider provider : TranslationProvider.values()) {
+            if (provider == TranslationProvider.CLOUDFLARE) continue; // covered separately
             responses.add(new Response(200, success("Bonjour")));
             assertEquals(Arrays.asList("Bonjour"), translate(provider, provider.id + "-test-key"));
             Connection connection = connections.get(connections.size() - 1);
@@ -295,6 +319,97 @@ public class TranslationRequestTest {
                 "```json\n{\"lines\":[\"Bonjour\"]}\n```")));
         assertEquals(Arrays.asList("Bonjour"),
                 translate(TranslationProvider.XKIRO, "test-key"));
+    }
+
+    @Test
+    public void cloudflareBuildsAccountScopedUrlOmitsModelAndParsesResultResponse() throws Exception {
+        responses.add(new Response(200, cloudflareSuccess("Bonjour")));
+        assertEquals(Arrays.asList("Bonjour"), translateCloudflare("cf-token", "acct123"));
+        assertEquals(1, connections.size()); // no response_format retries
+        Connection connection = connections.get(0);
+        assertEquals("https://api.cloudflare.com/client/v4/accounts/acct123/ai/run/"
+                + "@cf/meta/llama-3.3-70b-instruct-fp8-fast", connection.getURL().toString());
+        assertEquals("POST", connection.getRequestMethod());
+        assertEquals("Bearer cf-token", connection.getRequestProperty("Authorization"));
+        assertNull(connection.getRequestProperty("HTTP-Referer"));
+        assertNull(connection.getRequestProperty("x-opencode-session"));
+        JSONObject body = connection.requestBody();
+        assertFalse(body.has("model"));
+        assertFalse(body.has("response_format"));
+        assertFalse(body.getBoolean("stream"));
+        assertNotNull(body.getJSONArray("messages"));
+        assertTrue(body.getJSONArray("messages").getJSONObject(1).getString("content")
+                .contains("{\"lines\":[\"Hello\"]}"));
+        assertTrue(connection.disconnected);
+    }
+
+    @Test
+    public void cloudflareAcceptsMarkdownFencedJsonInsideResultResponse() throws Exception {
+        responses.add(new Response(200, cloudflareResponse(
+                "```json\n{\"lines\":[\"Bonjour\"]}\n```")));
+        assertEquals(Arrays.asList("Bonjour"), translateCloudflare("cf-token", "acct123"));
+        assertEquals(1, connections.size());
+    }
+
+    @Test
+    public void cloudflareReportsFailureEnvelopeWithUsefulMessage() {
+        responses.add(new Response(403, "{\"success\":false,\"errors\":[{\"code\":10000,"
+                + "\"message\":\"Invalid API token\"}],\"messages\":[]}"));
+        Exception error = assertThrows(Exception.class,
+                () -> translateCloudflare("bad-token", "acct123"));
+        assertTrue(error.getMessage().contains("Cloudflare Workers AI"));
+        assertTrue(error.getMessage().contains("Invalid API token"));
+        assertEquals(1, connections.size());
+        assertTrue(connections.get(0).disconnected);
+    }
+
+    @Test
+    public void cloudflareReportsSuccessFalseEvenOnOkStatus() {
+        responses.add(new Response(200, "{\"success\":false,\"errors\":[{\"code\":10001,"
+                + "\"message\":\"Model unavailable\"}],\"messages\":[]}"));
+        Exception error = assertThrows(Exception.class,
+                () -> translateCloudflare("cf-token", "acct123"));
+        assertTrue(error.getMessage().contains("Model unavailable"));
+        assertEquals(1, connections.size());
+    }
+
+    @Test
+    public void cloudflareCatalogErrorIsNotSwallowedIntoAnEmptyModelList() {
+        responses.add(new Response(401, "{\"success\":false,\"errors\":[{\"code\":10000,"
+                + "\"message\":\"denied\"}]}"));
+        Exception error = assertThrows(Exception.class, () -> {
+            try {
+                fetchWithCredentials.invoke(null, TranslationProvider.CLOUDFLARE,
+                        "acct123", "bad-token");
+            } catch (InvocationTargetException e) {
+                if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
+                throw e;
+            }
+        });
+        assertTrue(error.getMessage().contains("Cloudflare"));
+        assertFalse(TranslationProvider.CLOUDFLARE.fallbackModels().isEmpty());
+    }
+
+    private static List<?> translateCloudflare(String key, String accountId) throws Exception {
+        try {
+            return (List<?>) requestWithAccount.invoke(null, TranslationProvider.CLOUDFLARE,
+                    key, accountId, TranslationProvider.CLOUDFLARE.defaultModel, null,
+                    "French", "", parseLyrics.invoke(null, "[00:01.00]Hello"));
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
+            throw e;
+        }
+    }
+
+    private static String cloudflareSuccess(String... lines) throws Exception {
+        return cloudflareResponse(new JSONObject()
+                .put("lines", new JSONArray(Arrays.asList(lines))).toString());
+    }
+
+    private static String cloudflareResponse(String content) throws Exception {
+        return new JSONObject().put("success", true)
+                .put("result", new JSONObject().put("response", content))
+                .put("errors", new JSONArray()).put("messages", new JSONArray()).toString();
     }
 
     private static List<?> translate(TranslationProvider provider, String key) throws Exception {

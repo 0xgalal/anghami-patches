@@ -111,6 +111,67 @@ public class TranslationProviderTest {
                 TranslationProvider.OPENCODE.parseModels("{\"error\":{\"message\":\"denied\"}}"));
     }
 
+    @Test
+    public void cloudflareUsesItsOwnPreferenceKeysAndDocumentedDefaultModel() {
+        TranslationProvider provider = TranslationProvider.fromId("cloudflare");
+        assertEquals(TranslationProvider.CLOUDFLARE, provider);
+        assertEquals("Cloudflare Workers AI", provider.displayName);
+        assertEquals("cloudflare_api_key", provider.preferenceKey("api_key"));
+        assertEquals("cloudflare_model", provider.preferenceKey("model"));
+        assertEquals("cloudflare_account_id", provider.preferenceKey("account_id"));
+        assertEquals("api_key", TranslationProvider.OPENROUTER.preferenceKey("api_key"));
+        assertEquals("model", TranslationProvider.OPENROUTER.preferenceKey("model"));
+        assertEquals("@cf/meta/llama-3.3-70b-instruct-fp8-fast", provider.defaultModel);
+        List<TranslationProvider.Model> fallbacks = provider.fallbackModels();
+        assertTrue(fallbacks.size() >= 3);
+        assertTrue(ids(fallbacks).contains(provider.defaultModel));
+        assertNotEquals(TranslationProvider.OPENROUTER.cacheModelKey("m"),
+                provider.cacheModelKey("m"));
+    }
+
+    @Test
+    public void cloudflareUrlsSubstituteAccountAndLiteralModelPath() {
+        assertEquals("https://api.cloudflare.com/client/v4/accounts/acct123/ai/run/"
+                        + "@cf/meta/llama-3.1-8b-instruct",
+                TranslationProvider.CLOUDFLARE.completionsUrl(
+                        " acct123 ", "@cf/meta/llama-3.1-8b-instruct"));
+        assertEquals("https://api.cloudflare.com/client/v4/accounts/acct123/ai/models",
+                TranslationProvider.CLOUDFLARE.modelsUrl("acct123"));
+    }
+
+    @Test
+    public void cloudflareCatalogParsesResultIdsNamesAndSkipsNonChatTasks() throws Exception {
+        JSONArray result = new JSONArray()
+                .put(new JSONObject().put("id", "@cf/meta/llama-3.1-8b-instruct")
+                        .put("name", "Llama 3.1 8B"))
+                .put(new JSONObject().put("id", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+                        .put("name", "Llama 3.3 70B Fast")
+                        .put("tasks", new JSONArray().put(new JSONObject()
+                                .put("name", "Text Generation"))))
+                .put(new JSONObject().put("id", "@cf/black-forest-labs/flux-1-schnell")
+                        .put("name", "Flux").put("task", "Text-to-Image"))
+                .put(new JSONObject().put("id", ""))
+                .put(new JSONObject().put("id", "@cf/meta/llama-3.1-8b-instruct"))
+                .put(JSONObject.NULL);
+        String body = new JSONObject().put("success", true).put("result", result).toString();
+        List<TranslationProvider.Model> models = TranslationProvider.CLOUDFLARE.parseModels(body);
+        assertEquals(Arrays.asList("@cf/meta/llama-3.1-8b-instruct",
+                "@cf/meta/llama-3.3-70b-instruct-fp8-fast"), ids(models));
+        assertTrue(models.get(0).displayName().contains("Llama 3.1 8B"));
+        assertFalse(models.get(0).displayName().endsWith("FREE"));
+        assertFalse(models.get(0).free);
+    }
+
+    @Test
+    public void cloudflareCatalogFailureIsAnErrorInsteadOfAnEmptyList() {
+        Exception error = assertThrows(Exception.class, () ->
+                TranslationProvider.CLOUDFLARE.parseModels("{\"success\":false,"
+                        + "\"errors\":[{\"code\":10000,\"message\":\"denied\"}]}"));
+        assertTrue(error.getMessage().contains("denied"));
+        assertThrows(Exception.class, () ->
+                TranslationProvider.CLOUDFLARE.parseModels("{\"data\":[{\"id\":\"x\"}]}"));
+    }
+
     private static JSONObject openCodeModel(String id, String name, String input, String output)
             throws Exception {
         return new JSONObject().put("id", id).put("name", name).put("type", "chat")

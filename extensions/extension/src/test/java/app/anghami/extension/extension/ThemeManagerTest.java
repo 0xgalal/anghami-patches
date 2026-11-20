@@ -1,6 +1,7 @@
 package app.anghami.extension.extension;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -21,6 +22,46 @@ public class ThemeManagerTest {
     public void outOfRangeIdsFallBackToFirstPreset() {
         assertEquals("Tokyo Nights", ThemeManager.presetName(-1));
         assertEquals("Tokyo Nights", ThemeManager.presetName(99));
+    }
+
+    @Test
+    public void defaultIsAppendedAsTheSixthChoice() {
+        assertEquals("Default", ThemeManager.presetName(ThemeManager.DEFAULT_ID));
+        assertEquals(5, ThemeManager.DEFAULT_ID);
+        assertTrue(ThemeManager.shouldOverride(0));
+        assertFalse("Default must not apply any color override",
+                ThemeManager.shouldOverride(ThemeManager.DEFAULT_ID));
+    }
+
+    @Test
+    public void legacyThemeIdsStillMapToTheOriginalFive() {
+        String[] expected = {
+                "Tokyo Nights", "Neon Sunset", "Midnight Ocean", "Forest Glow", "Rose Quartz"
+        };
+        for (int id = 0; id < expected.length; id++) {
+            assertEquals("stored id " + id + " must keep its old theme",
+                    expected[id], ThemeManager.presetName(id));
+            assertTrue("stored id " + id + " must still tint", ThemeManager.shouldOverride(id));
+        }
+    }
+
+    @Test
+    public void defaultCarriesNoColorOverrideInEitherMode() {
+        for (boolean night : new boolean[] { true, false }) {
+            int id = ThemeManager.DEFAULT_ID;
+            assertEquals(ThemeManager.NO_OVERRIDE, ThemeManager.presetBackground(id, night));
+            assertEquals(ThemeManager.NO_OVERRIDE, ThemeManager.presetAccent(id, night));
+            assertEquals(ThemeManager.NO_OVERRIDE, ThemeManager.presetSecondary(id, night));
+            assertEquals(ThemeManager.NO_OVERRIDE, ThemeManager.presetForeground(id, night));
+            assertEquals(ThemeManager.NO_OVERRIDE, ThemeManager.presetOnAccent(id, night));
+        }
+    }
+
+    @Test
+    public void restoringStockColorsWithoutAnyCapturesIsHarmless() {
+        // No Android views are touched on the plain JVM; this covers the
+        // no-op path used when Default is selected before any theme was applied.
+        ThemeManager.restoreStockColors();
     }
 
     @Test
