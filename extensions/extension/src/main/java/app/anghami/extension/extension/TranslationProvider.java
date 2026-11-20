@@ -37,6 +37,16 @@ enum TranslationProvider {
             new String[]{
                     "mistralai/mistral-small-2603", "cohere/command-a-translate",
                     "cohere/north-small-translate", "openai/gpt-5.6-luna",
+            }),
+    CLOUDFLARE("cloudflare", "Cloudflare Workers AI",
+            "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}",
+            "https://api.cloudflare.com/client/v4/accounts/{account}/ai/models",
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            new String[]{
+                    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                    "@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.2-3b-instruct",
+                    "@cf/meta/llama-4-scout-17b-16e-instruct",
+                    "@cf/qwen/qwen3-30b-a3b-fp8",
             });
 
     final String id;
@@ -63,6 +73,25 @@ enum TranslationProvider {
         return OPENROUTER;
     }
 
+    /**
+     * Cloudflare puts both the account and the model in the path. The model is
+     * inserted verbatim (Cloudflare documents URLs such as
+     * {@code /ai/run/@cf/meta/llama-3.1-8b-instruct}); percent-encoding the
+     * whole id would turn its path separators into %2F, which is unnecessary.
+     */
+    String completionsUrl(String accountId, String model) {
+        return completionsUrl.replace("{account}", placeholderValue(accountId))
+                .replace("{model}", placeholderValue(model));
+    }
+
+    String modelsUrl(String accountId) {
+        return modelsUrl.replace("{account}", placeholderValue(accountId));
+    }
+
+    private static String placeholderValue(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     String preferenceKey(String key) {
         // Keep existing OpenRouter credentials and model selections on upgrade.
         return this == OPENROUTER ? key : id + "_" + key;
@@ -74,7 +103,22 @@ enum TranslationProvider {
     }
 
     List<Model> parseModels(String body) throws Exception {
-        JSONArray data = new JSONObject(body).getJSONArray("data");
+        JSONObject root = new JSONObject(body);
+        JSONArray data;
+        if (this == CLOUDFLARE) {
+            // Cloudflare wraps its catalog in {"success":true,"result":[...]}
+            // instead of the OpenAI-style {"data":[...]} used by the others.
+            if (!root.optBoolean("success", false)) {
+                throw new Exception("Cloudflare Workers AI model catalog request failed"
+                        + errorDetail(root));
+            }
+            data = root.optJSONArray("result");
+            if (data == null) {
+                throw new Exception("Cloudflare Workers AI returned no model catalog");
+            }
+        } else {
+            data = root.getJSONArray("data");
+        }
         List<Model> models = new ArrayList<Model>();
         Set<String> seen = new HashSet<String>();
         for (int i = 0; i < data.length(); i++) {
@@ -82,7 +126,9 @@ enum TranslationProvider {
             if (model == null) continue;
             String id = model.optString("id", "").trim();
             if (id.isEmpty() || "null".equals(id)) continue;
-            if (this == XKIRO) {
+            if (this == CLOUDFLARE) {
+                if (!cloudflareChatModel(model)) continue;
+            } else if (this == XKIRO) {
                 if (!"chat".equals(model.optString("modality", ""))) continue;
             } else if (!"chat".equals(model.optString("type", "chat"))
                     || !supportsText(model)) continue;
@@ -105,7 +151,7 @@ enum TranslationProvider {
                         && isZeroPrice(output.optString("price", "")));
                 // Console's free chat routes return 403 outside the OpenCode app.
                 if (free) continue;
-            } else {
+            } else if (this == XKIRO) {
                 JSONObject pricing = model.optJSONObject("pricing");
                 String accessTier = model.optString("access_tier", "").trim();
                 free = !accessTier.isEmpty()
@@ -113,6 +159,10 @@ enum TranslationProvider {
                         : (pricing != null
                         && isZeroPrice(pricing.optString("input", ""))
                         && isZeroPrice(pricing.optString("output", "")));
+            } else {
+                // Cloudflare inference is billed to the account; nothing is
+                // labelled FREE even when the account has free credits.
+                free = false;
             }
             if (!seen.add(id)) continue;
             String name = model.optString(this == XKIRO ? "display_name" : "name", id).trim();
@@ -138,6 +188,43 @@ enum TranslationProvider {
             models.add(new Model(model, model, free));
         }
         return models;
+    }
+
+    /**
+     * The Workers AI catalog mixes chat models with image, audio, embedding
+     * and classification models. Skip the ones whose task metadata clearly
+     * says they cannot produce chat-completion text; when a catalog entry has
+     * no task metadata, keep it so custom/run models remain selectable.
+     */
+    private static boolean cloudflareChatModel(JSONObject model) {
+        String task = model.optString("task", "").trim();
+        if (task.isEmpty()) {
+            JSONArray tasks = model.optJSONArray("tasks");
+            if (tasks != null && tasks.length() > 0) {
+                JSONObject first = tasks.optJSONObject(0);
+                task = first == null ? tasks.optString(0, "")
+                        : first.optString("name", first.optString("id", ""));
+            }
+        }
+        if (task.isEmpty()) task = model.optString("type", "").trim();
+        if (task.isEmpty()) return true;
+        String lower = task.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("text generation") || lower.contains("text-generation")
+                || lower.contains("chat");
+    }
+
+    private static String errorDetail(JSONObject root) {
+        JSONArray errors = root.optJSONArray("errors");
+        if (errors == null || errors.length() == 0) return "";
+        StringBuilder detail = new StringBuilder();
+        for (int i = 0; i < errors.length(); i++) {
+            JSONObject error = errors.optJSONObject(i);
+            String code = error == null ? "" : error.optString("code", "");
+            String message = error == null ? "" : error.optString("message", "");
+            if (!code.isEmpty()) detail.append(" (code ").append(code).append(')');
+            if (!message.isEmpty()) detail.append(": ").append(message);
+        }
+        return detail.toString();
     }
 
     private static boolean supportsText(JSONObject model) {

@@ -1315,6 +1315,21 @@ public final class LrclibFallback {
             if (fr) return "Utilisez une clé API xKiro. Les modèles gratuits ont un quota quotidien de jetons ; les modèles payants nécessitent un forfait ou un solde admissible, et les modèles premium un forfait admissible ou un dépôt réel.";
             return "Use an xKiro API key. Free models have a daily token allowance; paid models need an eligible plan or balance, and premium models need an eligible plan or real deposit.";
         }
+        if ("cloudflare_note".equals(key)) {
+            if (ar) return "يتطلب مفتاح Cloudflare API مع صلاحية Workers AI ومعرّف الحساب. يُوضع معرّف النموذج في المسار، ويُقرأ نص الرد ككائن JSON.";
+            if (fr) return "Nécessite un jeton API Cloudflare avec l’accès Workers AI et l’identifiant du compte. L’ID du modèle est placé dans le chemin et le texte de la réponse est analysé comme du JSON.";
+            return "Requires a Cloudflare API token with Workers AI access plus your Account ID. The model ID goes in the URL path and the reply text is parsed as JSON.";
+        }
+        if ("cloudflare_account_id_label".equals(key)) {
+            if (ar) return "معرّف الحساب";
+            if (fr) return "Identifiant du compte";
+            return "Account ID";
+        }
+        if ("cloudflare_config_required".equals(key)) {
+            if (ar) return "أدخل مفتاح Cloudflare API ومعرّف الحساب والنموذج ولغة الترجمة";
+            if (fr) return "Saisissez le jeton Cloudflare, l’identifiant du compte, le modèle et la langue cible";
+            return "Enter a Cloudflare API token, Account ID, model, and target language";
+        }
         if ("model_label".equals(key)) {
             if (ar) return "النموذج";
             if (fr) return "Modèle";
@@ -2837,6 +2852,7 @@ public final class LrclibFallback {
     private static final class TranslationSettings {
         final TranslationProvider provider;
         String apiKey = "";
+        String accountId = "";
         String model;
         String language = "English";
         String systemPrompt = "";
@@ -2891,12 +2907,14 @@ public final class LrclibFallback {
         try {
             SharedPreferences p = translationPrefs(ctx);
             String apiKey = p.getString(provider.preferenceKey("api_key"), "");
+            String accountId = p.getString(provider.preferenceKey("account_id"), "");
             String model = p.getString(provider.preferenceKey("model"), provider.defaultModel);
             String defaultLanguage = "ar".equalsIgnoreCase(Locale.getDefault().getLanguage())
                     ? "Arabic" : "English";
             String language = p.getString("language", defaultLanguage);
             String systemPrompt = p.getString("system_prompt", "");
             settings.apiKey = apiKey == null ? "" : apiKey;
+            settings.accountId = accountId == null ? "" : accountId;
             settings.model = model == null ? provider.defaultModel : model;
             settings.language = language == null ? defaultLanguage : language;
             settings.systemPrompt = systemPrompt == null ? "" : systemPrompt;
@@ -2917,17 +2935,25 @@ public final class LrclibFallback {
         for (TranslationSettings draft : drafts) {
             editor.putString(draft.provider.preferenceKey("api_key"), trimOrEmpty(draft.apiKey))
                     .putString(draft.provider.preferenceKey("model"), trimOrEmpty(draft.model));
+            // Only Cloudflare needs an account id. Other providers keep their
+            // original storage keys untouched.
+            if (draft.provider == TranslationProvider.CLOUDFLARE) {
+                editor.putString(draft.provider.preferenceKey("account_id"),
+                        trimOrEmpty(draft.accountId));
+            }
         }
         editor.apply();
     }
 
     private static boolean hasProviderNote(TranslationProvider provider) {
-        return provider == TranslationProvider.OPENCODE || provider == TranslationProvider.XKIRO;
+        return provider == TranslationProvider.OPENCODE || provider == TranslationProvider.XKIRO
+                || provider == TranslationProvider.CLOUDFLARE;
     }
 
     private static String translationProviderNote(TranslationProvider provider) {
         if (provider == TranslationProvider.OPENCODE) return tr("opencode_note");
         if (provider == TranslationProvider.XKIRO) return tr("xkiro_note");
+        if (provider == TranslationProvider.CLOUDFLARE) return tr("cloudflare_note");
         return "";
     }
 
@@ -2968,7 +2994,9 @@ public final class LrclibFallback {
         }
         final String[] language = {settings.language};
         final String[] systemPrompt = {systemPromptForDialog(settings.systemPrompt)};
-        final TextView[] credentialSummaries = new TextView[2];
+        // 0 = API key/token, 1 = model, 2 = Cloudflare Account ID.
+        final TextView[] credentialSummaries = new TextView[3];
+        final View[] accountIdRow = new View[1];
         final TextView providerNote = new TextView(ctx);
         providerNote.setText(translationProviderNote(provider[0]));
         providerNote.setTextColor(Color.rgb(166, 172, 181));
@@ -3023,6 +3051,9 @@ public final class LrclibFallback {
                                                         provider[0].displayName);
                                                 credentialSummaries[0].setText(maskedApiKey(draft.apiKey));
                                                 credentialSummaries[1].setText(draft.model);
+                                                applyCloudflareAccountRow(provider[0],
+                                                        accountIdRow[0], credentialSummaries[2],
+                                                        draft.accountId);
                                                 providerNote.setText(
                                                         translationProviderNote(provider[0]));
                                                 providerNote.setVisibility(
@@ -3059,12 +3090,38 @@ public final class LrclibFallback {
                         });
             }
         });
+        credentialSummaries[2] = addSettingsRow(ctx, rows, tr("cloudflare_account_id_label"),
+                maskedAccountId(settings.accountId), new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                final TranslationSettings draft = drafts[provider[0].ordinal()];
+                showTextSettingDialog(ctx, draft.provider.displayName + " · "
+                        + tr("cloudflare_account_id_label"), draft.accountId,
+                        android.text.InputType.TYPE_CLASS_TEXT
+                                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+                        false, new TextSettingListener() {
+                            @Override
+                            public void onValueChanged(String value) {
+                                draft.accountId = value;
+                                if (provider[0] == draft.provider) {
+                                    credentialSummaries[2].setText(maskedAccountId(value));
+                                }
+                            }
+                        });
+            }
+        });
+        // addSettingsRow returns the summary TextView; its parent is the card.
+        accountIdRow[0] = (View) credentialSummaries[2].getParent();
+        applyCloudflareAccountRow(provider[0], accountIdRow[0], credentialSummaries[2],
+                settings.accountId);
+
         credentialSummaries[1] = addSettingsRow(ctx, rows, tr("model_label"), settings.model,
                 new View.OnClickListener() {
             @Override
             public void onClick(final View view) {
                 final TranslationSettings draft = drafts[provider[0].ordinal()];
-                showModelSelector(ctx, draft.provider, draft.model, new ModelSelectionListener() {
+                showModelSelector(ctx, draft.provider, draft.accountId, draft.apiKey,
+                        draft.model, new ModelSelectionListener() {
                     @Override
                     public void onModelSelected(String value) {
                         draft.model = value;
@@ -3150,6 +3207,7 @@ public final class LrclibFallback {
                 final TranslationProvider providerValue = provider[0];
                 final TranslationSettings draft = drafts[providerValue.ordinal()];
                 final String apiKeyValue = trimOrEmpty(draft.apiKey);
+                final String accountIdValue = trimOrEmpty(draft.accountId);
                 final String modelValue = trimOrEmpty(draft.model);
                 final String languageValue = trimOrEmpty(language[0]);
                 final String systemPromptValue =
@@ -3157,9 +3215,12 @@ public final class LrclibFallback {
                 final boolean autoTranslateEnabled = includeAutoToggle
                         ? autoTranslateToggle.isChecked() : settings.autoTranslate;
                 boolean requiresApiKey = !configOnly || autoTranslateEnabled;
+                boolean needsAccount = providerValue == TranslationProvider.CLOUDFLARE;
                 if ((requiresApiKey && apiKeyValue.isEmpty())
+                        || (needsAccount && accountIdValue.isEmpty())
                         || modelValue.isEmpty() || languageValue.isEmpty()) {
-                    Toast.makeText(ctx, tr("translation_config_required"),
+                    Toast.makeText(ctx, needsAccount ? tr("cloudflare_config_required")
+                                    : tr("translation_config_required"),
                             Toast.LENGTH_SHORT).show();
                     return;
                 }
@@ -3219,8 +3280,8 @@ public final class LrclibFallback {
                     return;
                 }
                 dialog.dismiss();
-                translateAndRender(ctx, song, snapshot, providerValue, apiKeyValue, modelValue,
-                        languageValue, systemPromptValue, true);
+                translateAndRender(ctx, song, snapshot, providerValue, apiKeyValue,
+                        accountIdValue, modelValue, languageValue, systemPromptValue, true);
             }
         });
     }
@@ -3307,6 +3368,18 @@ public final class LrclibFallback {
                 ? tr("not_configured") : "••••••••";
     }
 
+    private static String maskedAccountId(String accountId) {
+        return accountId == null || accountId.trim().isEmpty()
+                ? tr("not_configured") : accountId.trim();
+    }
+
+    private static void applyCloudflareAccountRow(TranslationProvider provider, View row,
+                                                  TextView summary, String accountId) {
+        boolean visible = provider == TranslationProvider.CLOUDFLARE;
+        if (row != null) row.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (summary != null) summary.setText(maskedAccountId(accountId));
+    }
+
     private static void showTextSettingDialog(Context ctx, String title, String initial,
                                               int inputType, boolean multiline,
                                               final TextSettingListener listener) {
@@ -3349,6 +3422,13 @@ public final class LrclibFallback {
     private static void showModelSelector(final Context ctx, final TranslationProvider provider,
                                           final String currentModel,
                                           final ModelSelectionListener listener) {
+        showModelSelector(ctx, provider, "", "", currentModel, listener);
+    }
+
+    private static void showModelSelector(final Context ctx, final TranslationProvider provider,
+                                          final String accountId, final String apiKey,
+                                          final String currentModel,
+                                          final ModelSelectionListener listener) {
         final ProgressDialog progress = new ProgressDialog(ctx);
         progress.setMessage(String.format(tr("fetching_models"), provider.displayName));
         progress.setCancelable(true);
@@ -3359,7 +3439,7 @@ public final class LrclibFallback {
                 List<Model> models = null;
                 boolean fetchFailed = false;
                 try {
-                    models = fetchTranslationModels(provider);
+                    models = fetchTranslationModels(provider, accountId, apiKey);
                     if (models.isEmpty()) fetchFailed = true;
                 } catch (Throwable t) {
                     fetchFailed = true;
@@ -3392,19 +3472,36 @@ public final class LrclibFallback {
     }
 
     private static List<Model> fetchTranslationModels(TranslationProvider provider) throws Exception {
+        return fetchTranslationModels(provider, "", "");
+    }
+
+    private static List<Model> fetchTranslationModels(TranslationProvider provider,
+                                                     String accountId, String apiKey)
+            throws Exception {
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) new URL(provider.modelsUrl).openConnection();
+            String catalogUrl = provider == TranslationProvider.CLOUDFLARE
+                    ? provider.modelsUrl(accountId) : provider.modelsUrl;
+            connection = (HttpURLConnection) new URL(catalogUrl).openConnection();
             connection.setRequestMethod("GET");
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("User-Agent", "AnghamiLyricsFallback/1.0");
+            if (provider == TranslationProvider.CLOUDFLARE && apiKey != null
+                    && !apiKey.trim().isEmpty()) {
+                connection.setRequestProperty("Authorization", "Bearer " + apiKey.trim());
+            }
             connection.setConnectTimeout(HTTP_TIMEOUT_MS);
             connection.setReadTimeout(HTTP_TIMEOUT_MS);
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
                 throw new Exception(provider.displayName + " returned HTTP " + status);
             }
-            return provider.parseModels(readUtf8(connection.getInputStream()));
+            String body = readUtf8(connection.getInputStream());
+            if (provider == TranslationProvider.CLOUDFLARE) {
+                String failure = cloudflareFailureMessage(body);
+                if (failure != null) throw new Exception(failure);
+            }
+            return provider.parseModels(body);
         } finally {
             if (connection != null) connection.disconnect();
         }
@@ -3547,7 +3644,13 @@ public final class LrclibFallback {
         if (ctx == null) return false;
         TranslationSettings settings = readTranslationSettings(ctx);
         return settings.autoTranslate && !settings.apiKey.trim().isEmpty()
-                && !settings.model.trim().isEmpty() && !settings.language.trim().isEmpty();
+                && !settings.model.trim().isEmpty() && !settings.language.trim().isEmpty()
+                && hasRequiredAccountId(settings);
+    }
+
+    private static boolean hasRequiredAccountId(TranslationSettings settings) {
+        return settings.provider != TranslationProvider.CLOUDFLARE
+                || !settings.accountId.trim().isEmpty();
     }
 
     private static boolean canAutoTranslate(TranslationSettings settings,
@@ -3556,6 +3659,7 @@ public final class LrclibFallback {
                 && !settings.apiKey.trim().isEmpty()
                 && !settings.model.trim().isEmpty()
                 && !settings.language.trim().isEmpty()
+                && hasRequiredAccountId(settings)
                 && snapshot != null && !snapshot.lines.isEmpty()
                 && !allArabicScriptLines(snapshot.lines)
                 && snapshot.lines.size() <= MAX_TRANSLATION_LINES
@@ -3565,6 +3669,7 @@ public final class LrclibFallback {
     private static boolean sameTranslationSettings(TranslationSettings left,
                                                    TranslationSettings right) {
         return left.provider == right.provider && left.apiKey.equals(right.apiKey)
+                && left.accountId.equals(right.accountId)
                 && left.model.equals(right.model) && left.language.equals(right.language)
                 && left.systemPrompt.equals(right.systemPrompt)
                 && left.autoTranslate == right.autoTranslate;
@@ -3594,7 +3699,8 @@ public final class LrclibFallback {
                         return;
                     }
                     translateAndRender(ctx, song, latest, current.provider, current.apiKey,
-                            current.model, current.language, current.systemPrompt, false);
+                            current.accountId, current.model, current.language,
+                            current.systemPrompt, false);
                 }
             });
             return true;
@@ -3607,7 +3713,8 @@ public final class LrclibFallback {
     private static void translateAndRender(final Context ctx, final Object song,
                                            final SourceSnapshot snapshot,
                                            final TranslationProvider provider,
-                                           final String apiKey, final String model,
+                                           final String apiKey, final String accountId,
+                                           final String model,
                                            final String language,
                                            final String systemPrompt,
                                            final boolean interactive) {
@@ -3665,8 +3772,8 @@ public final class LrclibFallback {
                     try {
                         String sessionId = provider == TranslationProvider.OPENCODE
                                 ? openCodeSessionId(ctx) : null;
-                        translated = requestTranslation(provider, apiKey, model, sessionId,
-                                language, systemPrompt, snapshot.lines);
+                        translated = requestTranslation(provider, apiKey, accountId, model,
+                                sessionId, language, systemPrompt, snapshot.lines);
                         writeTranslationCache(ctx, cacheKey, translated);
                     } catch (Throwable t) {
                         failure = t.getMessage();
@@ -3695,6 +3802,7 @@ public final class LrclibFallback {
                             }
                             boolean settingsMatch = selected.provider == provider
                                     && selected.apiKey.equals(apiKey)
+                                    && selected.accountId.equals(accountId)
                                     && selected.model.equals(model)
                                     && selected.language.equals(language)
                                     && selected.systemPrompt.equals(systemPrompt)
@@ -3813,10 +3921,22 @@ public final class LrclibFallback {
                                                    String model, String sessionId, String language,
                                                    String systemPrompt, List<Line> source)
             throws Exception {
+        return requestTranslation(provider, apiKey, "", model, sessionId, language, systemPrompt,
+                source);
+    }
+
+    private static List<String> requestTranslation(TranslationProvider provider, String apiKey,
+                                                   String accountId, String model,
+                                                   String sessionId, String language,
+                                                   String systemPrompt, List<Line> source)
+            throws Exception {
+        boolean cloudflare = provider == TranslationProvider.CLOUDFLARE;
         JSONArray inputLines = new JSONArray();
         for (Line line : source) inputLines.put(line.text == null ? "" : line.text);
         JSONObject request = new JSONObject();
-        request.put("model", model);
+        // Cloudflare identifies the model in the URL path; sending a "model"
+        // field in the body is not part of its run endpoint contract.
+        if (!cloudflare) request.put("model", model);
         if (provider == TranslationProvider.OPENROUTER) request.put("temperature", 0.1);
         request.put("stream", false);
         String systemInstructions = translationSystemPrompt(systemPrompt, source.size());
@@ -3837,8 +3957,10 @@ public final class LrclibFallback {
 
         Exception lastError = null;
         // Prefer strict schema output, then relax to JSON mode for models or
-        // provider routes that do not support structured outputs.
-        int firstOutputMode = provider == TranslationProvider.XKIRO ? 1 : 2;
+        // provider routes that do not support structured outputs. Cloudflare's
+        // run endpoint has no response_format, so it uses a single plain call.
+        int firstOutputMode = cloudflare ? 0
+                : provider == TranslationProvider.XKIRO ? 1 : 2;
         for (int outputMode = firstOutputMode; outputMode >= 0; outputMode--) {
             HttpURLConnection connection = null;
             try {
@@ -3847,7 +3969,9 @@ public final class LrclibFallback {
                     attempt.put("response_format",
                             translationResponseFormat(outputMode, source.size()));
                 }
-                connection = (HttpURLConnection) new URL(provider.completionsUrl).openConnection();
+                String endpoint = cloudflare
+                        ? provider.completionsUrl(accountId, model) : provider.completionsUrl;
+                connection = (HttpURLConnection) new URL(endpoint).openConnection();
                 connection.setRequestMethod("POST");
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Authorization", "Bearer " + apiKey);
@@ -3876,13 +4000,18 @@ public final class LrclibFallback {
                         ? connection.getInputStream() : connection.getErrorStream();
                 String body = readUtf8(stream);
                 if (status >= 200 && status < 300) {
+                    String failure = cloudflare ? cloudflareFailureMessage(body) : null;
+                    if (failure != null) throw new Exception(failure);
                     return parseTranslationResponse(body, source);
                 }
-                String detail = provider.displayName + " HTTP " + status;
-                try {
-                    JSONObject error = new JSONObject(body).optJSONObject("error");
-                    if (error != null) detail += ": " + error.optString("message", "");
-                } catch (Exception ignored) {
+                String detail = cloudflare ? cloudflareFailureMessage(body) : null;
+                if (detail == null) {
+                    detail = provider.displayName + " HTTP " + status;
+                    try {
+                        JSONObject error = new JSONObject(body).optJSONObject("error");
+                        if (error != null) detail += ": " + error.optString("message", "");
+                    } catch (Exception ignored) {
+                    }
                 }
                 lastError = new Exception(detail);
                 if (status != 400 && status != 422) throw lastError;
@@ -3927,9 +4056,47 @@ public final class LrclibFallback {
         return text.toString();
     }
 
-    private static List<String> parseTranslationResponse(String body, List<Line> source)
-            throws Exception {
+    /**
+     * Cloudflare reports errors as {"success":false,"errors":[...]}. Returns a
+     * readable message, or null when the body is not a Cloudflare envelope.
+     */
+    private static String cloudflareFailureMessage(String body) {
+        try {
+            JSONObject root = new JSONObject(body);
+            if (!root.has("success") || root.optBoolean("success", true)) return null;
+            StringBuilder detail = new StringBuilder("Cloudflare Workers AI");
+            JSONArray errors = root.optJSONArray("errors");
+            if (errors != null) {
+                for (int i = 0; i < errors.length(); i++) {
+                    JSONObject error = errors.optJSONObject(i);
+                    String code = error == null ? "" : error.optString("code", "");
+                    String message = error == null ? "" : error.optString("message", "");
+                    if (!code.isEmpty()) detail.append(" error ").append(code);
+                    if (!message.isEmpty()) detail.append(": ").append(message);
+                }
+            }
+            if (detail.length() == "Cloudflare Workers AI".length()) {
+                detail.append(" request failed");
+            }
+            return detail.toString();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Pull the assistant's raw text out of either Cloudflare's or an OpenAI-style envelope. */
+    private static String extractTranslationContent(String body) throws Exception {
         JSONObject root = new JSONObject(body);
+        if (root.has("success") && root.has("result")) {
+            String failure = cloudflareFailureMessage(body);
+            if (failure != null) throw new Exception(failure);
+            JSONObject result = root.optJSONObject("result");
+            Object response = result == null ? null : result.opt("response");
+            if (!(response instanceof String)) {
+                throw new Exception("Cloudflare Workers AI returned no response text");
+            }
+            return ((String) response).trim();
+        }
         JSONArray choices = root.optJSONArray("choices");
         if (choices == null || choices.length() == 0) {
             throw new Exception("Translation provider returned no choices");
@@ -3943,20 +4110,22 @@ public final class LrclibFallback {
             throw new Exception("Translation response reached the model's output limit");
         }
         Object contentValue = message.opt("content");
-        String content;
-        if (contentValue instanceof String) {
-            content = ((String) contentValue).trim();
-        } else if (contentValue instanceof JSONArray) {
+        if (contentValue instanceof String) return ((String) contentValue).trim();
+        if (contentValue instanceof JSONArray) {
             StringBuilder combined = new StringBuilder();
             JSONArray parts = (JSONArray) contentValue;
             for (int i = 0; i < parts.length(); i++) {
                 JSONObject part = parts.optJSONObject(i);
                 if (part != null) combined.append(part.optString("text", ""));
             }
-            content = combined.toString().trim();
-        } else {
-            throw new Exception("Translation provider returned unsupported content");
+            return combined.toString().trim();
         }
+        throw new Exception("Translation provider returned unsupported content");
+    }
+
+    private static List<String> parseTranslationResponse(String body, List<Line> source)
+            throws Exception {
+        String content = extractTranslationContent(body);
         // Be forgiving about the envelope: fenced markdown, extra keys, a
         // bare array, or the older "translations" name are all acceptable.
         // What matters is getting an array of strings we can align to the

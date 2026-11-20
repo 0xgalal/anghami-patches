@@ -34,7 +34,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 | 💊&nbsp;Patch | 📜&nbsp;Description | ⚙️&nbsp;Options |
 |----------|----------------|-----------|
-| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
+| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, xKiro, or Cloudflare Workers AI. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
@@ -49,7 +49,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 | [Remove popup promos](#remove-popup-promos) | No-ops the in-house popup funnel, the fullscreen startup dialog, and the flyer ad callback. Google SDK ads untouched. |  |
 | [Spoof stock app signature](#spoof-stock-app-signature) | Forces SignatureUtils.getAppSignature to hash with the stock cert prefix (he9B...kw=), so X-ANGH-APP-RGSIG matches a stock install. Salt/body hashing unchanged. |  |
 | [Theme row title](#theme-row-title) | Retitles the runtime Theme settings row to 'THEME' by repurposing the unused dummy_tag_1 string resource. |  |
-| [Theme section in Settings](#theme-section-in-settings) | Adds a Theme section to Settings with five presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz) for the app chrome and player. |  |
+| [Theme section in Settings](#theme-section-in-settings) | Adds a Theme section to Settings with six presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz, Default) for the app chrome and player. |  |
 | [Unforce shuffle](#unforce-shuffle) | Forces server shuffleOn=false, blocks client-reported skip-limit similar-song fallback, disables the pick-a-song radio redirect, and enables shuffle buttons without breaking manual or header Shuffle. |  |
 | [Unlock downloads](#unlock-downloads) | No-ops download limit asserts, forces limited-plan=false and large offline caps (999999). Local gates only; the server still authorizes files. |  |
 | [Unlock local Plus](#unlock-local-plus) | Forces Account.isPlus/isPlusUser=true, enablePlayerRestrictions=false, canPlayOfflineAndFree=true. Local UI/gating only; server premium checks remain. |  |
@@ -91,15 +91,18 @@ automatic translation is enabled.
 Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It pulls in
 the LRCLIB fallback patch it depends on.
 In the player, long-press the native **Lyrics** button to open the translation
-dialog. Tap **Provider** to select **OpenRouter**, **OpenCode**, or **xKiro**,
-then enter that provider's API key, model ID, and target language. Keys and
-selected models are saved separately for each provider.
+dialog. Tap **Provider** to select **OpenRouter**, **OpenCode**, **xKiro**, or
+**Cloudflare Workers AI**, then enter that provider's API token/key, model ID,
+and target language. Keys and selected models are saved separately for each
+provider.
 
 The model picker fetches OpenRouter's current free models, OpenCode's
-externally usable chat models, or xKiro's public chat catalog. If a catalog
-cannot be reached, it uses that provider's built-in list. Custom model IDs are
-also supported. Defaults are `inception/mercury-2.5-preview` for OpenRouter,
-`glm-5.3-flash` for OpenCode, and `mistralai/mistral-small-2603` for xKiro.
+externally usable chat models, xKiro's public chat catalog, or the Workers AI
+models for your Cloudflare account. If a catalog cannot be reached, it uses
+that provider's built-in list. Custom model IDs are also supported. Defaults
+are `inception/mercury-2.5-preview` for OpenRouter, `glm-5.3-flash` for
+OpenCode, `mistralai/mistral-small-2603` for xKiro, and
+`@cf/meta/llama-3.3-70b-instruct-fp8-fast` for Cloudflare Workers AI.
 OpenCode uses a [Console API key](https://opencode.ai/docs/console/harnesses)
 with pay-as-you-go credits. Its free-tier chat models are restricted to the
 OpenCode app and cannot be used from Anghami.
@@ -107,6 +110,25 @@ xKiro uses an [API key](https://docs.xkiro.com/guides/authentication/) and
 supports OpenAI-compatible chat completions. Free models have a daily token
 allowance; paid models need an eligible plan or balance, and premium models
 need an eligible plan or a real deposit.
+
+#### Cloudflare Workers AI
+
+Cloudflare needs **two** credentials: an API token with the `Workers AI - Read`
+and `Workers AI - Edit` permissions, and your **Account ID**. Both are shown on
+the [Workers AI REST API page](https://dash.cloudflare.com/?to=/:account/ai/workers-ai)
+of the Cloudflare dashboard (select **Use REST API**), or see the
+[REST API guide](https://developers.cloudflare.com/workers-ai/get-started/rest-api/).
+Enter the token in the **API key** row and the Account ID in the new
+**Account ID** row; it only appears when Cloudflare is the selected provider.
+The token is sent as `Authorization: Bearer ...`, and the Account ID plus the
+model ID are placed in the URL path
+(`/client/v4/accounts/{account}/ai/run/{model}`), so the model is not included
+in the JSON body. This endpoint does not use `response_format`; the model is
+prompted to return the `{"lines": [...]}` JSON object and the reply text in
+`result.response` is parsed by the same extraction path as the other
+providers. The catalog at `/ai/models` is fetched with the same token and
+account ID; if it fails, the built-in model list is shown instead. Inference is
+billed to your Cloudflare account, so models are never marked FREE here.
 
 The default target language is Arabic on Arabic-locale devices or English
 otherwise. Enabling auto-translate
@@ -129,7 +151,7 @@ only uncached lyrics are sent to the selected provider.
 ### Theme section in Settings
 
 **Theme section in Settings** adds a **Theme** row to Anghami's native Settings
-page (next to the Music section). Opening it offers five presets:
+page (next to the Music section). Opening it offers six presets:
 
 | Preset | Look |
 |--------|------|
@@ -138,6 +160,7 @@ page (next to the Music section). Opening it offers five presets:
 | Midnight Ocean | Deep navy with blue and teal accents |
 | Forest Glow | Deep green with mint and lime accents |
 | Rose Quartz | Dark rose with pink and blush accents |
+| Default | The app's original baseline colors — no theme overlay |
 
 A preset recolors the app chrome (status and navigation bars on every screen)
 and the player surface (root background and the Lyrics / Queue control-row
@@ -145,6 +168,13 @@ accents). It is stored in app-private preferences, so changing it takes effect
 immediately and survives restarts. This is a runtime overlay — the existing
 build-time **Player theme** / **Player theme background** palettes are left
 untouched, so both can be enabled together.
+
+**Default** is appended as the last choice (stored id `5`), so theme ids `0`–`4`
+saved by older builds keep pointing at the same five themes. It applies no
+colors: selecting it restores the original window, status/navigation bar, view
+background, text, button and card colors captured when the previous theme was
+applied, and stops all further tinting. It behaves the same in dark and light
+system modes — neither mode gets an overlay.
 
 ### 🛠️ Building locally
 

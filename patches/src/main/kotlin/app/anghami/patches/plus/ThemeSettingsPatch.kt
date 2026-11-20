@@ -13,12 +13,13 @@ private const val THEME_HELPER = "Lapp/anghami/extension/extension/ThemeManager;
  * Adds a "Theme" section to Anghami's native Settings page and applies the
  * selected preset to the whole app: window + status/navigation bars, the
  * Android view hierarchy (backgrounds, text, buttons, cards, toolbars) and
- * the player surface (root background + control-row accents). Each preset
- * has a dark and a brighter light palette selected from the current uiMode.
+ * the player surface (root background + control-row accents). Each of the
+ * five color presets has a dark and a brighter light palette selected from
+ * the current uiMode; the appended Default choice applies no overlay.
  *
- * The picker offers five presets — Tokyo Nights, Neon Sunset, Midnight Ocean,
- * Forest Glow and Rose Quartz — stored in SharedPreferences so a single
- * install supports all of them. The existing build-time player palette stays
+ * The picker offers six presets — Tokyo Nights, Neon Sunset, Midnight Ocean,
+ * Forest Glow, Rose Quartz and Default — stored in SharedPreferences so a
+ * single install supports all of them. The existing build-time player palette stays
  * untouched; this patch only adds runtime calls, each of which is a single
  * static invoke at method entry (no branches, no labels, no new registers),
  * which is the label-safe insertion form used throughout this project.
@@ -26,7 +27,7 @@ private const val THEME_HELPER = "Lapp/anghami/extension/extension/ThemeManager;
 @Suppress("unused")
 val themeSettingsPatch = bytecodePatch(
     name = "Theme section in Settings",
-    description = "Adds a Theme section to Settings with five presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz) for the app chrome and player.",
+    description = "Adds a Theme section to Settings with six presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz, Default) for the app chrome and player.",
     default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
