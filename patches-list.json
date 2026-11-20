@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
@@ -490,7 +490,7 @@
     },
     {
       "name": "Theme section in Settings",
-      "description": "Adds a Theme section to Settings with five presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz) for the app chrome and player.",
+      "description": "Adds a Theme section to Settings with six presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz, Default) for the app chrome and player.",
       "default": true,
       "category": null,
       "dependencies": [

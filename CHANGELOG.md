@@ -1,3 +1,9 @@
+## [1.17.0](https://github.com/0xgalal/anghami-patches/compare/v1.16.0...v1.17.0) (2026-11-20)
+
+### ✨ New Features
+
+* add Cloudflare Workers AI provider and Default theme ([71b01cb](https://github.com/0xgalal/anghami-patches/commit/71b01cbd013cf6dfe05e894958653598778b7096))
+
 ## [1.16.0](https://github.com/0xgalal/anghami-patches/compare/v1.15.0...v1.16.0) (2026-11-20)
 
 ### ✨ New Features

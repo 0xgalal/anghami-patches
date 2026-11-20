@@ -22,7 +22,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.16.0](https://github.com/0xgalal/anghami-patches/releases/tag/v1.16.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;20 patches total
+> **[v1.17.0](https://github.com/0xgalal/anghami-patches/releases/tag/v1.17.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;20 patches total
 <details open>
 <summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;20 patches</summary>
 <br>
@@ -34,7 +34,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 | 💊&nbsp;Patch | 📜&nbsp;Description | ⚙️&nbsp;Options |
 |----------|----------------|-----------|
-| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, xKiro, or Cloudflare Workers AI. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
+| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
