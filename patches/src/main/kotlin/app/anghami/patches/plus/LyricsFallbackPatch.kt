@@ -50,7 +50,7 @@ private const val FALLBACK_HELPER =
 val lyricsFallbackPatch = bytecodePatch(
     name = "LRCLIB lyrics fallback",
     description = "When the server returns truncated/empty lyrics, fetches the full text from LRCLIB (opt-in free source) into a separate cache. Native full lyrics and the Plus path are untouched.",
-    default = false,
+    default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     extendWith("extensions/extension.mpe")
@@ -218,7 +218,7 @@ val lyricsFallbackPatch = bytecodePatch(
 val lyricsOpenRouterTranslationPatch = bytecodePatch(
     name = "AI lyrics translation · OpenRouter / OpenCode / xKiro",
     description = "Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press the player Lyrics button to configure it.",
-    default = false,
+    default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
     dependsOn(lyricsFallbackPatch)
