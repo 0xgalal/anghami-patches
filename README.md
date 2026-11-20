@@ -166,3 +166,5 @@ keep failing, and do not redistribute patched APKs as "Premium Unlocked".
 ## 📜 License
 
 Anghami patches by Nady are licensed under the [GNU General Public License v3.0](LICENSE)
+
+> v1.17.2: patch set restored to the v1.3.0 baseline; lyrics fallback, AI translation and dialogs retained.
