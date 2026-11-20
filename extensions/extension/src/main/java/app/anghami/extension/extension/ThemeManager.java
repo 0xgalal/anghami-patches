@@ -6,11 +6,16 @@ import android.app.Application;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.Window;
+import android.widget.Button;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -20,15 +25,21 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Runtime theme picker for the app chrome and the player.
+ * Runtime theme picker for the whole app, including the player.
  *
  * The shipped patch set bakes one player palette into resources/dex at build
  * time. This manager deliberately stays out of that bytecode: it applies a
  * preset at runtime from SharedPreferences, so all five choices work from a
- * single install. Application.onCreate registers lifecycle callbacks so the
- * status/navigation bars follow the selected palette on every screen, and the
- * player fragment's onResume hook calls {@link #applyPlayerTheme(Object)} for
- * the player-specific tint.
+ * single install. Each preset has a dark palette (night mode) and a brighter
+ * light palette (day mode), selected from the current uiMode.
+ *
+ * Application.onCreate registers lifecycle callbacks so the window, status
+ * and navigation bars follow the selected palette on every screen, and the
+ * entire Android view hierarchy under {@code android.R.id.content} is walked
+ * to recolor view backgrounds, text, buttons and cards. The player fragment's
+ * onResume hook calls {@link #applyPlayerTheme(Object)} for the
+ * player-specific tint. Compose-owned screens cannot be recolored through
+ * the view tree; their window colors still follow the theme.
  *
  * Any failure is caught and logged — theming must never break the host app.
  */
@@ -40,7 +51,8 @@ public final class ThemeManager {
     private static final String KEY_THEME = "theme_id";
     /** LIVE_RADIO is not present in the main Settings list; used as click sentinel. */
     private static final String SENTINEL = "LIVE_RADIO";
-    private static final int ROW_TITLE_RES = 0x7f130fd6; // pick_theme -> "PICK THEME"
+    /** dummy_tag_1: empty, unused stock string repurposed to "THEME" by themeTitleResourcePatch. */
+    private static final int ROW_TITLE_RES = 0x7f130b07;
     private static final int ROW_ICON_RES = 0x7f080810; // ico_settings_music_settings
 
     private static volatile WeakReference<Activity> settingsActivity =
@@ -49,21 +61,50 @@ public final class ThemeManager {
             new WeakReference<Object>(null);
     private static volatile Application registeredApp;
 
-    private enum Preset {
-        TOKYO_NIGHTS(0xff0b0e1a, 0xffff2e88, 0xff29e5ff),
-        NEON_SUNSET(0xff1a0e14, 0xffff7a45, 0xffffd166),
-        MIDNIGHT_OCEAN(0xff071426, 0xff3da5ff, 0xff00e0c6),
-        FOREST_GLOW(0xff0a1710, 0xff5be39b, 0xffc8ff7a),
-        ROSE_QUARTZ(0xff1a0f14, 0xffff7eb6, 0xffffc8dd);
-
+    /** One mode's concrete colors. All colors are opaque ARGB. */
+    private static final class Palette {
         final int background;
         final int accent;
         final int secondary;
+        final int foreground;
+        final int onAccent;
 
-        Preset(int background, int accent, int secondary) {
+        Palette(int background, int accent, int secondary, int foreground, int onAccent) {
             this.background = background;
             this.accent = accent;
             this.secondary = secondary;
+            this.foreground = foreground;
+            this.onAccent = onAccent;
+        }
+    }
+
+    private enum Preset {
+        TOKYO_NIGHTS(
+                new Palette(0xff0b0e1a, 0xffff2e88, 0xff29e5ff, 0xfff5f5fa, 0xff0b0e1a),
+                new Palette(0xfff7f2ff, 0xffc2185b, 0xff00695c, 0xff1a1030, 0xffffffff)),
+        NEON_SUNSET(
+                new Palette(0xff1a0e14, 0xffff7a45, 0xffffd166, 0xfffdf2ee, 0xff1a0e14),
+                new Palette(0xfffff5ef, 0xffd84315, 0xff8d6e00, 0xff2a160f, 0xffffffff)),
+        MIDNIGHT_OCEAN(
+                new Palette(0xff071426, 0xff3da5ff, 0xff00e0c6, 0xffeaf4ff, 0xff071426),
+                new Palette(0xfff0f7ff, 0xff1565c0, 0xff00897b, 0xff10233a, 0xffffffff)),
+        FOREST_GLOW(
+                new Palette(0xff0a1710, 0xff5be39b, 0xffc8ff7a, 0xfff0fff5, 0xff0a1710),
+                new Palette(0xfff3faef, 0xff2e7d32, 0xff558b2f, 0xff11240f, 0xffffffff)),
+        ROSE_QUARTZ(
+                new Palette(0xff1a0f14, 0xffff7eb6, 0xffffc8dd, 0xfffdf0f6, 0xff1a0f14),
+                new Palette(0xfffff4f8, 0xffad1457, 0xff880e4f, 0xff2a101a, 0xffffffff));
+
+        final Palette dark;
+        final Palette light;
+
+        Preset(Palette dark, Palette light) {
+            this.dark = dark;
+            this.light = light;
+        }
+
+        Palette forMode(boolean night) {
+            return night ? dark : light;
         }
 
         static Preset fromId(int id) {
@@ -212,15 +253,23 @@ public final class ThemeManager {
 
     // ---- applying a preset ---------------------------------------------
 
-    /** App chrome: status and navigation bars on every resumed Activity. */
+    /** Whole-app chrome: window, status/navigation bars and the view hierarchy. */
     public static void applyTheme(Activity activity) {
         try {
             if (activity == null) return;
-            Preset preset = Preset.fromId(loadThemeId(activity));
-            android.view.Window window = activity.getWindow();
+            Palette preset = paletteFor(activity);
+            Window window = activity.getWindow();
             if (window != null) {
                 window.setStatusBarColor(preset.background);
                 window.setNavigationBarColor(preset.background);
+                try {
+                    window.setBackgroundDrawable(new ColorDrawable(preset.background));
+                } catch (Throwable ignored) {
+                }
+            }
+            View content = activity.findViewById(android.R.id.content);
+            if (content instanceof ViewGroup) {
+                tintViewTree((ViewGroup) content, preset);
             }
         } catch (Throwable t) {
             Log.d(TAG, "applyTheme failed: " + t);
@@ -235,8 +284,7 @@ public final class ThemeManager {
             Object rootObj = getFieldUp(fragmentObj, "e"); // player/ui/d.e root view
             if (!(rootObj instanceof View)) return;
             View root = (View) rootObj;
-            Context ctx = root.getContext();
-            Preset preset = Preset.fromId(loadThemeId(ctx));
+            Palette preset = paletteFor(root.getContext());
             root.setBackgroundColor(preset.background);
             Object controlsObj = getFieldUp(fragmentObj, "V"); // fl_lyrics
             if (controlsObj instanceof View) {
@@ -262,13 +310,79 @@ public final class ThemeManager {
         }
     }
 
-    private static void tintControls(ViewGroup group, Preset preset) {
+    private static Palette paletteFor(Context ctx) {
+        return Preset.fromId(loadThemeId(ctx)).forMode(isNight(ctx));
+    }
+
+    /** True for UI_MODE_NIGHT_YES; defaults to the dark palette if unavailable. */
+    private static boolean isNight(Context ctx) {
+        try {
+            int uiMode = ctx.getResources().getConfiguration().uiMode
+                    & Configuration.UI_MODE_NIGHT_MASK;
+            return uiMode == Configuration.UI_MODE_NIGHT_YES;
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    /**
+     * Recursively recolor the Android view tree. Deliberately conservative:
+     * only flat ColorDrawable backgrounds are replaced (selectors, ripples,
+     * gradients and images are left alone), so state lists and custom views
+     * keep working. Every step is guarded because theming must be cheap and
+     * non-fatal on every resume.
+     */
+    private static void tintViewTree(View view, Palette preset) {
+        if (view == null) return;
+        String className = view.getClass().getName();
+        boolean keySurface = className.contains("Toolbar") || className.contains("ActionBar");
+        try {
+            Drawable background = view.getBackground();
+            // Flat colors (and key surfaces with no background at all) are
+            // safe to replace; selectors, ripples and images are preserved.
+            if (background instanceof ColorDrawable
+                    || (background == null && (view instanceof Button || keySurface))) {
+                view.setBackgroundColor(
+                        view instanceof Button ? preset.accent : preset.background);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (className.contains("CardView")) {
+                Method method = view.getClass().getMethod("setCardBackgroundColor", Integer.TYPE);
+                method.invoke(view, preset.background);
+            }
+            if (view instanceof Button) {
+                view.setBackgroundTintList(
+                        android.content.res.ColorStateList.valueOf(preset.accent));
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (view instanceof TextView) {
+                TextView text = (TextView) view;
+                text.setTextColor(view instanceof Button
+                        ? preset.onAccent
+                        : (view.isClickable() ? preset.accent : preset.foreground));
+            }
+        } catch (Throwable ignored) {
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            int count = group.getChildCount();
+            for (int i = 0; i < count; i++) {
+                tintViewTree(group.getChildAt(i), preset);
+            }
+        }
+    }
+
+    private static void tintControls(ViewGroup group, Palette preset) {
         for (int i = 0; i < group.getChildCount(); i++) {
             tintControlsRecursive(group.getChildAt(i), preset);
         }
     }
 
-    private static void tintControlsRecursive(View view, Preset preset) {
+    private static void tintControlsRecursive(View view, Palette preset) {
         if (view instanceof TextView) {
             ((TextView) view).setTextColor(preset.accent);
         }
@@ -355,17 +469,40 @@ public final class ThemeManager {
         return null;
     }
 
+    // ---- test accessors -------------------------------------------------
+
     /** Exposed for unit tests: resolves a preset for any id, including out-of-range. */
     static String presetName(int id) {
         return PRESET_NAMES[Preset.fromId(id).ordinal()];
     }
 
-    /** Exposed for unit tests: palette accessors. */
+    /** Legacy dark-palette accessors retained for compatibility with existing tests. */
     static int presetBackground(int id) {
-        return Preset.fromId(id).background;
+        return Preset.fromId(id).dark.background;
     }
 
     static int presetAccent(int id) {
-        return Preset.fromId(id).accent;
+        return Preset.fromId(id).dark.accent;
+    }
+
+    /** Mode-aware palette accessors. {@code night == true} selects the dark palette. */
+    static int presetBackground(int id, boolean night) {
+        return Preset.fromId(id).forMode(night).background;
+    }
+
+    static int presetAccent(int id, boolean night) {
+        return Preset.fromId(id).forMode(night).accent;
+    }
+
+    static int presetSecondary(int id, boolean night) {
+        return Preset.fromId(id).forMode(night).secondary;
+    }
+
+    static int presetForeground(int id, boolean night) {
+        return Preset.fromId(id).forMode(night).foreground;
+    }
+
+    static int presetOnAccent(int id, boolean night) {
+        return Preset.fromId(id).forMode(night).onAccent;
     }
 }

@@ -70,9 +70,6 @@ import java.util.regex.Pattern;
  *   dialog when the player's Lyrics button is long-pressed; its "Lyrics
  *   options" button opens {@link #showOptionsForSong} for manual LRCLIB
  *   search, retry, synced/plain toggle and cache clearing.
- * - {@link #installManualTranslateButton} installs a compact AI control after
- *   the player's Lyrics button for one-tap manual translation of the current
- *   song using the saved provider/model/language.
  *
  * All app classes are touched via reflection: the extension compiles
  * without the app on the classpath. Any failure is caught and logged;
@@ -100,27 +97,23 @@ public final class LrclibFallback {
     // lyrics. Keep each attempt short so a slow/unreachable endpoint fails
     // fast instead of stalling the whole waterfall for 12s per request.
     private static final int LRCLIB_TIMEOUT_MS = 6000;
-    // Aggregator/Apple/KuGou endpoints can be slower than LRCLIB. Give them
+    // Aggregator/Apple endpoints can be slower than LRCLIB. Give them
     // a little more room, but keep it bounded so a total miss still ends.
     private static final int EXTENDED_TIMEOUT_MS = 9000;
-    private static final String KUGOU_SEARCH_URL = "https://lyrics.kugou.com/search";
-    private static final String KUGOU_DOWNLOAD_URL = "https://lyrics.kugou.com/download";
     private static final String[] LYRICSPLUS_BASES = {
             "https://lyricsplus.binimum.org",
             "https://lyricsplus.prjktla.my.id",
             "https://lyricsplus.binimum.org/"
     };
     private static final String BETTERLYRICS_URL = "https://lyrics-api.boidu.dev/getLyrics";
-    private static final String PAXSENIX_SEARCH_URL =
-            "https://lyrics.paxsenix.org/apple-music/search";
-    private static final String PAXSENIX_LYRICS_URL =
-            "https://lyrics.paxsenix.org/apple-music/lyrics";
-    private static final String BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-    private static final int MAX_EXTENDED_CANDIDATES = 3;
+    // A candidate that matches the playing song may be a slightly longer cut
+    // (extended outro, live version, different master). Accept equal and
+    // longer recordings up to this bound; shorter cuts keep the tighter
+    // DURATION_TOLERANCE_MS that the old providers used.
     private static final int DURATION_TOLERANCE_MS = 8000;
     private static final int CANDIDATE_DURATION_TOLERANCE_MS = 10000;
-    private static final int TRANSLATION_TIMEOUT_MS = 90000;
+    private static final long LONGER_DURATION_TOLERANCE_MS = 30000L;
+    private static final int TRANSLATION_TIMEOUT_MS = 10000;
     private static final int MAX_TRANSLATION_LINES = 800;
     private static final int MAX_TRANSLATION_CHARS = 40000;
     private static final String DEFAULT_TRANSLATION_SYSTEM_PROMPT =
@@ -138,6 +131,11 @@ public final class LrclibFallback {
             "\n\nAdditional user instructions:\n";
 
     private LrclibFallback() {
+    }
+
+    /** Timeout applied to connect and read of the AI translation POST. */
+    static int translationRequestTimeoutMs() {
+        return TRANSLATION_TIMEOUT_MS;
     }
 
     // ---- last-render state (single visible lyrics view at a time) ----
@@ -298,146 +296,6 @@ public final class LrclibFallback {
             applyLyricsButtonLabel((View) targetObj);
         } catch (Throwable t) {
             Log.d(TAG, "installLyricsButtonLongPress failed: " + t);
-        }
-    }
-
-    /** Tag used to keep the injected manual-translate control idempotent. */
-    private static final String AI_BUTTON_TAG = "ai_translate_button";
-
-    /**
-     * Adds a compact "AI" control immediately after the player's native
-     * Lyrics button (spacer view installed between Lyrics and Queue in the
-     * secondary-controls row), wired to a one-tap manual translation of the
-     * current song. Safe to call on every onResume.
-     */
-    public static void installManualTranslateButton(Object fragmentObj) {
-        try {
-            if (fragmentObj == null) return;
-            Object targetObj = getFieldUp(fragmentObj, "V"); // fl_lyrics
-            if (!(targetObj instanceof View)) return;
-            View lyrics = (View) targetObj;
-            ViewParent parent = lyrics.getParent();
-            if (!(parent instanceof ViewGroup)) return;
-            final ViewGroup group = (ViewGroup) parent;
-
-            for (int i = 0; i < group.getChildCount(); i++) {
-                View child = group.getChildAt(i);
-                if (AI_BUTTON_TAG.equals(child.getTag())) {
-                    return; // already installed by an earlier onResume
-                }
-            }
-            int lyricsIndex = -1;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                if (group.getChildAt(i) == lyrics) {
-                    lyricsIndex = i;
-                    break;
-                }
-            }
-            if (lyricsIndex < 0) return;
-
-            Context ctx = lyrics.getContext();
-            if (ctx == null) return;
-            TextView button = new TextView(ctx);
-            button.setTag(AI_BUTTON_TAG);
-            button.setText("AI");
-            button.setTextColor(Color.rgb(235, 238, 243));
-            button.setTextSize(11f);
-            button.setGravity(Gravity.CENTER);
-            button.setClickable(true);
-            button.setFocusable(true);
-            final WeakReference<Object> fragmentRef = new WeakReference<Object>(fragmentObj);
-            button.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    translateNowFromPlayer(view.getContext(), fragmentRef.get());
-                }
-            });
-
-            ViewGroup.LayoutParams params = buildButtonParams(ctx, lyrics, group);
-            if (params != null) {
-                button.setLayoutParams(params);
-            }
-            group.addView(button, lyricsIndex + 1);
-        } catch (Throwable t) {
-            Log.d(TAG, "installManualTranslateButton failed: " + t);
-        }
-    }
-
-    /**
-     * Clones the Lyrics view's ConstraintLayout params so the new control
-     * sits between Lyrics and Queue instead of overlapping either one.
-     */
-    private static ViewGroup.LayoutParams buildButtonParams(Context ctx, View lyrics,
-                                                             ViewGroup group) {
-        try {
-            int queueId = ctx.getResources().getIdentifier("btn_queue", "id",
-                    ctx.getPackageName());
-            View queue = queueId == 0 ? null : group.findViewById(queueId);
-            ViewGroup.LayoutParams source = lyrics.getLayoutParams();
-            ViewGroup.LayoutParams params;
-            if (source != null && source.getClass().getConstructor(source.getClass()) != null) {
-                params = source.getClass().getConstructor(source.getClass()).newInstance(source);
-            } else {
-                params = new ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT);
-            }
-            setIntField(params, "startToStart", -1);
-            setIntField(params, "startToEnd", lyrics.getId());
-            setIntField(params, "endToEnd", -1);
-            setIntField(params, "endToStart", queue != null ? queue.getId() : -1);
-            // Vertical constraints and margins are copied from the Lyrics view.
-            params.width = queue != null ? 0 : ViewGroup.LayoutParams.WRAP_CONTENT;
-            params.height = 0;
-            return params;
-        } catch (Throwable t) {
-            Log.d(TAG, "buildButtonParams failed: " + t);
-            return null;
-        }
-    }
-
-    private static void setIntField(Object target, String name, int value) {
-        try {
-            Field field = findField(target.getClass(), name);
-            if (field != null) {
-                field.setAccessible(true);
-                field.setInt(target, value);
-            }
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private static Field findField(Class<?> type, String name) {
-        Class<?> current = type;
-        while (current != null) {
-            try {
-                return current.getDeclaredField(name);
-            } catch (NoSuchFieldException ignored) {
-                current = current.getSuperclass();
-            }
-        }
-        return null;
-    }
-
-    /** One-tap translation: translate immediately when settings exist, else configure. */
-    private static void translateNowFromPlayer(Context ctx, Object fragmentObj) {
-        try {
-            if (ctx == null) return;
-            Object song = currentSongFromPlayer(fragmentObj);
-            TranslationSettings settings = readTranslationSettings(ctx);
-            SourceSnapshot snapshot = song == null ? null : translationSourceFor(song);
-            boolean configured = settings.provider != null
-                    && !trimOrEmpty(settings.apiKey).isEmpty()
-                    && !trimOrEmpty(settings.model).isEmpty()
-                    && !trimOrEmpty(settings.language).isEmpty();
-            if (snapshot == null || snapshot.lines.isEmpty() || !configured) {
-                showTranslationDialog(ctx, song, fragmentObj, false);
-                return;
-            }
-            translateAndRender(ctx, song, snapshot, settings.provider, settings.apiKey,
-                    settings.model, settings.language, settings.systemPrompt, true);
-        } catch (Throwable t) {
-            Log.d(TAG, "translateNowFromPlayer failed: " + t);
         }
     }
 
@@ -1650,11 +1508,30 @@ public final class LrclibFallback {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** Remember which providers the user checked in the lyrics options dialog. */
+    /**
+     * The user's provider selection is one stable global preference. It is
+     * read from a single key on every song and never derived from per-song
+     * state (cache, last source used, current song, defaults) or written by a
+     * read path. Only an explicit change in the Lyrics sources checklist
+     * writes it.
+     */
     private static boolean[] loadSelectedSources(Context ctx) {
+        return loadSelectedSources(prefs(ctx));
+    }
+
+    static boolean[] loadSelectedSources(SharedPreferences p) {
+        return parseSelectedSources(p.getString(PREF_LYRIC_SOURCES, null));
+    }
+
+    /**
+     * Decode the saved ids. A missing preference is a first run: show all
+     * sources as checked without writing anything. An explicitly saved empty
+     * selection (the user unchecked everything) stays empty, and ids of
+     * removed providers are ignored so they never reappear.
+     */
+    static boolean[] parseSelectedSources(String raw) {
         boolean[] checked = new boolean[LYRIC_SOURCE_IDS.length];
-        String raw = prefs(ctx).getString(PREF_LYRIC_SOURCES, null);
-        if (raw == null || raw.trim().isEmpty()) {
+        if (raw == null) {
             for (int i = 0; i < checked.length; i++) checked[i] = true;
             return checked;
         }
@@ -1668,13 +1545,22 @@ public final class LrclibFallback {
     }
 
     private static void saveSelectedSources(Context ctx, boolean[] checked) {
+        saveSelectedSources(prefs(ctx), checked);
+    }
+
+    static void saveSelectedSources(SharedPreferences p, boolean[] checked) {
+        p.edit().putString(PREF_LYRIC_SOURCES, encodeSelectedSources(checked)).apply();
+    }
+
+    /** Only currently supported ids are written; unknown/removed ids are dropped. */
+    static String encodeSelectedSources(boolean[] checked) {
         StringBuilder raw = new StringBuilder();
         for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
-            if (!checked[i]) continue;
+            if (checked == null || i >= checked.length || !checked[i]) continue;
             if (raw.length() > 0) raw.append(',');
             raw.append(LYRIC_SOURCE_IDS[i]);
         }
-        prefs(ctx).edit().putString(PREF_LYRIC_SOURCES, raw.toString()).apply();
+        return raw.toString();
     }
 
     private static Cached readCache(Context ctx, String key) {
@@ -1774,15 +1660,13 @@ public final class LrclibFallback {
 
     /** IDs used by the options dialog, in the order they are offered. */
     static final String[] LYRIC_SOURCE_IDS = {
-            "lrclib", "kugou", "lyricsplus", "betterlyrics", "paxsenix"
+            "lrclib", "lyricsplus", "betterlyrics"
     };
 
     static String sourceLabel(String id) {
         if ("lrclib".equals(id)) return "LRCLIB";
-        if ("kugou".equals(id)) return "KuGou";
         if ("lyricsplus".equals(id)) return "LyricsPlus";
         if ("betterlyrics".equals(id)) return "Better Lyrics";
-        if ("paxsenix".equals(id)) return "Paxsenix";
         return id;
     }
 
@@ -1790,10 +1674,8 @@ public final class LrclibFallback {
     static Result fromSource(SongInfo song, String source) {
         if (song == null || source == null) return null;
         if ("lrclib".equals(source)) return fromLrclib(song);
-        if ("kugou".equals(source)) return fromKugou(song);
         if ("lyricsplus".equals(source)) return fromLyricsPlus(song);
         if ("betterlyrics".equals(source)) return fromBetterLyrics(song);
-        if ("paxsenix".equals(source)) return fromPaxsenix(song);
         return null;
     }
 
@@ -1815,7 +1697,7 @@ public final class LrclibFallback {
 
     /** Keep trying source after source until one returns usable lyrics. */
     private static Result fromExtendedSources(SongInfo song, SearchProgress progress) {
-        String[] ids = {"kugou", "lyricsplus", "betterlyrics", "paxsenix"};
+        String[] ids = {"lyricsplus", "betterlyrics"};
         for (String id : ids) {
             if (progress != null) {
                 progress.update(String.format(Locale.ROOT, tr("trying_source"),
@@ -1987,7 +1869,7 @@ public final class LrclibFallback {
             String body = httpGet(u);
             if (body == null) return null;
             return pickFirst(new JSONArray(body),
-                    "search track=" + track + " artist=" + artist);
+                    "search track=" + track + " artist=" + artist, duration);
         } catch (Exception e) {
             return null;
         }
@@ -1999,13 +1881,13 @@ public final class LrclibFallback {
             String q = (track + (artist.isEmpty() ? "" : " " + artist)).trim();
             String body = httpGet(SOURCE_URL + "/api/search?q=" + enc(q));
             if (body == null) return null;
-            return pickFirst(new JSONArray(body), "search q=" + q);
+            return pickFirst(new JSONArray(body), "search q=" + q, duration);
         } catch (Exception e) {
             return null;
         }
     }
 
-    // ============ extra lyrics sources (KuGou -> LyricsPlus -> Better Lyrics -> Paxsenix) ============
+    // ============ extra lyrics sources (LyricsPlus -> Better Lyrics) ============
 
     private static Result lrcResult(String lrc, String queryUsed, String source) {
         if (lrc == null) return null;
@@ -2033,52 +1915,6 @@ public final class LrclibFallback {
         } catch (Exception ignored) {
         }
         return 0;
-    }
-
-    /** KuGou: search candidates, then download a base64-encoded .lrc file. */
-    private static Result fromKugou(SongInfo song) {
-        try {
-            String keyword = (normalize(song.title, true) + " - "
-                    + normalize(song.artist, true)).trim();
-            if ("-".equals(keyword) || keyword.trim().isEmpty()) return null;
-            StringBuilder u = new StringBuilder(KUGOU_SEARCH_URL)
-                    .append("?ver=1&man=yes&client=pc&keyword=").append(enc(keyword));
-            if (song.hasDuration && song.duration > 0) {
-                u.append("&duration=")
-                        .append(enc(String.valueOf(Math.round(song.duration * 1000f))));
-            }
-            String body = httpGet(u.toString(), BROWSER_UA, EXTENDED_TIMEOUT_MS);
-            if (body == null) return null;
-            JSONArray candidates = new JSONObject(body).optJSONArray("candidates");
-            if (candidates == null) return null;
-            int limit = Math.min(candidates.length(), MAX_EXTENDED_CANDIDATES);
-            for (int i = 0; i < limit; i++) {
-                JSONObject cand = candidates.optJSONObject(i);
-                if (cand == null) continue;
-                long candMs = longValue(cand.opt("duration"));
-                if (song.hasDuration && candMs > 0
-                        && Math.abs(candMs - song.duration * 1000f) > DURATION_TOLERANCE_MS) {
-                    continue;
-                }
-                String id = cand.optString("id", "");
-                String accessKey = cand.optString("accesskey", "");
-                if (id.isEmpty() || accessKey.isEmpty()) continue;
-                String download = httpGet(KUGOU_DOWNLOAD_URL
-                        + "?fmt=lrc&charset=utf8&client=pc&ver=1&id=" + enc(id)
-                        + "&accesskey=" + enc(accessKey), BROWSER_UA, EXTENDED_TIMEOUT_MS);
-                if (download == null) continue;
-                String content = new JSONObject(download).optString("content", "");
-                if (content.isEmpty()) continue;
-                byte[] decoded = android.util.Base64.decode(
-                        content.getBytes("UTF-8"), android.util.Base64.DEFAULT);
-                String lrc = new String(decoded, "UTF-8");
-                Result r = lrcResult(lrc, "kugou " + keyword, "kugou");
-                if (r != null) return r;
-            }
-        } catch (Throwable t) {
-            Log.d(TAG, "KuGou lookup failed: " + t);
-        }
-        return null;
     }
 
     /** LyricsPlus: several deployments of an Apple/Musixmatch/Spotify aggregator. */
@@ -2137,60 +1973,6 @@ public final class LrclibFallback {
         }
     }
 
-    /** Paxsenix: search the Apple Music catalogue, then fetch the best match. */
-    private static Result fromPaxsenix(SongInfo song) {
-        try {
-            String q = (normalize(song.title, true) + " "
-                    + normalize(song.artist, true)).trim();
-            if (q.isEmpty()) return null;
-            String body = httpGet(PAXSENIX_SEARCH_URL + "?q=" + enc(q),
-                    BROWSER_UA, EXTENDED_TIMEOUT_MS);
-            if (body == null) return null;
-            JSONArray hits = new JSONArray(body);
-            List<String[]> scored = new ArrayList<String[]>();
-            for (int i = 0; i < Math.min(hits.length(), 20); i++) {
-                JSONObject hit = hits.optJSONObject(i);
-                if (hit == null) continue;
-                String track = hit.optString("trackName", hit.optString("songName", ""));
-                String artist = hit.optString("artistName", "");
-                long durationMs = longValue(hit.opt("duration"));
-                int durationSec = durationMs > 0 ? (int) (durationMs / 1000) : -1;
-                int score = candidateScore(song.title, song.artist,
-                        song.hasDuration ? (int) song.duration : -1,
-                        track, artist, durationSec);
-                String id = hit.optString("id", "");
-                if (score > 0 && !id.isEmpty()) {
-                    scored.add(new String[]{String.valueOf(score), id, artist, track});
-                }
-            }
-            Collections.sort(scored, new Comparator<String[]>() {
-                @Override
-                public int compare(String[] a, String[] b) {
-                    return Integer.compare(Integer.parseInt(b[0]), Integer.parseInt(a[0]));
-                }
-            });
-            for (int i = 0; i < Math.min(scored.size(), MAX_EXTENDED_CANDIDATES); i++) {
-                String[] pick = scored.get(i);
-                String lyricsBody = httpGet(PAXSENIX_LYRICS_URL + "?id=" + enc(pick[1]),
-                        BROWSER_UA, EXTENDED_TIMEOUT_MS);
-                if (lyricsBody == null) continue;
-                JSONObject data = new JSONObject(lyricsBody);
-                String lrc = ttmlToLrc(data.optString("ttmlContent", ""));
-                if (lrc.isEmpty()) {
-                    lrc = stripWordTags(data.optString("elrcMultiPerson",
-                            data.optString("elrc", "")));
-                }
-                if (lrc.isEmpty()) lrc = data.optString("plain", "");
-                Result r = lrcResult(lrc,
-                        "paxsenix " + pick[3] + " - " + pick[2], "paxsenix");
-                if (r != null) return r;
-            }
-        } catch (Throwable t) {
-            Log.d(TAG, "Paxsenix lookup failed: " + t);
-        }
-        return null;
-    }
-
     static int candidateScore(String title, String artist, int durationSec,
                                       String candidateTitle, String candidateArtist,
                                       int candidateDurationSec) {
@@ -2208,18 +1990,37 @@ public final class LrclibFallback {
             score += 50;
         }
         if (durationSec > 0 && candidateDurationSec > 0) {
-            long diff = Math.abs(candidateDurationSec - durationSec);
-            if (diff <= 2) score += 100;
-            else if (diff <= 5) score += 50;
-            else if (diff <= CANDIDATE_DURATION_TOLERANCE_MS / 1000) score += 10;
-            else score -= 50;
+            long deltaSec = candidateDurationSec - durationSec;
+            if (deltaSec >= 0) {
+                // Equal or longer is the normal match (extended outro, live
+                // master, rounded metadata). Keep those eligible with a
+                // generous upper bound; only absurd results are rejected.
+                if (deltaSec <= 2) score += 100;
+                else if (deltaSec <= 5) score += 50;
+                else if (deltaSec <= LONGER_DURATION_TOLERANCE_MS / 1000) score += 10;
+                else return 0;
+            } else {
+                // Shorter cuts keep the previous, tighter mismatch scoring.
+                long diff = -deltaSec;
+                if (diff <= 2) score += 100;
+                else if (diff <= 5) score += 50;
+                else if (diff <= CANDIDATE_DURATION_TOLERANCE_MS / 1000) score += 10;
+                else score -= 50;
+            }
         }
         return score;
     }
 
-    private static String stripWordTags(String raw) {
-        if (raw == null) return "";
-        return raw.replaceAll("<[^>]*>", "").replace("\r", "").trim();
+    /**
+     * Duration gate for search results. Equal-to-longer candidates are kept
+     * (a track can be a little longer than the playing file); shorter ones
+     * keep the old tight tolerance. Unknown durations are never filtered.
+     */
+    static boolean durationMatches(float songDurationSec, long candidateDurationMs) {
+        if (songDurationSec <= 0 || candidateDurationMs <= 0) return true;
+        long delta = candidateDurationMs - Math.round(songDurationSec * 1000f);
+        if (delta >= 0) return delta <= LONGER_DURATION_TOLERANCE_MS;
+        return -delta <= DURATION_TOLERANCE_MS;
     }
 
     /** Convert Apple-style TTML to .lrc using line-level begin timings. */
@@ -2324,12 +2125,14 @@ public final class LrclibFallback {
         }
     }
 
-    /** Auto-pick: first result with usable lyrics wins, no score threshold. */
-    private static Result pickFirst(JSONArray arr, String queryUsed) {
+    /** Auto-pick: first duration-compatible result with usable lyrics wins. */
+    private static Result pickFirst(JSONArray arr, String queryUsed, float durationSec) {
         try {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
                 if (o == null) continue;
+                long candidateMs = Math.round(o.optDouble("duration", -1) * 1000.0);
+                if (!durationMatches(durationSec, candidateMs)) continue;
                 Result r = fromRecord(o, queryUsed, "search");
                 if (r != null) return r;
             }
@@ -2840,13 +2643,34 @@ public final class LrclibFallback {
                 // of the lyrics view and hides the result.
                 dialog.dismiss();
                 String[] labels = new String[LYRIC_SOURCE_IDS.length];
+                // Always display the one global preference, for every song.
                 final boolean[] checked = loadSelectedSources(c);
+                final boolean[] changed = {false};
                 for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
                     labels[i] = sourceLabel(LYRIC_SOURCE_IDS[i]);
                 }
                 new AlertDialog.Builder(c)
                         .setTitle(tr("lyrics_sources"))
-                        .setMultiChoiceItems(labels, checked, null)
+                        .setMultiChoiceItems(labels, checked,
+                                new DialogInterface.OnMultiChoiceClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface d, int which,
+                                                        boolean isChecked) {
+                                        // Save on every checkbox change: dismiss,
+                                        // cancel or reopening cannot lose it.
+                                        checked[which] = isChecked;
+                                        changed[0] = true;
+                                        saveSelectedSources(c, checked);
+                                    }
+                                })
+                        .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                            @Override
+                            public void onDismiss(DialogInterface d) {
+                                // Opening the dialog alone is a read, not a
+                                // choice: never rewrite the preference then.
+                                if (changed[0]) saveSelectedSources(c, checked);
+                            }
+                        })
                         .setPositiveButton(tr("search"),
                                 new android.content.DialogInterface.OnClickListener() {
                                     @Override
@@ -2860,7 +2684,9 @@ public final class LrclibFallback {
                                                     Toast.LENGTH_SHORT).show();
                                             return;
                                         }
-                                        saveSelectedSources(c, checked);
+                                        // Selection was already persisted on
+                                        // each checkbox tap; searching does not
+                                        // change it.
                                         Toast.makeText(c, tr("searching"), Toast.LENGTH_SHORT).show();
                                         new Thread(new Runnable() {
                                             @Override
@@ -2910,12 +2736,14 @@ public final class LrclibFallback {
             public void onClick(View v) {
                 try {
                     Context c = v.getContext();
-                    // Keep the user's provider selection when clearing lyrics.
-                    String savedSources = prefs(c).getString(PREF_LYRIC_SOURCES, null);
-                    prefs(c).edit().clear().apply();
-                    if (savedSources != null) {
-                        prefs(c).edit().putString(PREF_LYRIC_SOURCES, savedSources).apply();
+                    // Remove cached lyrics only. The global source selection
+                    // key is never touched, so a cache clear cannot reset it.
+                    SharedPreferences p = prefs(c);
+                    SharedPreferences.Editor ed = p.edit();
+                    for (String key : p.getAll().keySet()) {
+                        if (!PREF_LYRIC_SOURCES.equals(key)) ed.remove(key);
                     }
+                    ed.apply();
                     Toast.makeText(c, tr("cache_cleared"), Toast.LENGTH_SHORT).show();
                     Log.d(TAG, "fallback cache cleared by user");
                 } catch (Throwable t) {
@@ -4032,8 +3860,12 @@ public final class LrclibFallback {
                 } else if (provider == TranslationProvider.OPENCODE) {
                     connection.setRequestProperty("x-opencode-session", sessionId);
                 }
-                connection.setConnectTimeout(HTTP_TIMEOUT_MS);
-                connection.setReadTimeout(TRANSLATION_TIMEOUT_MS);
+                // The translation endpoint gets its own 10s budget for both
+                // connect and read; lyric-source requests keep their own
+                // timeouts. Slow models fail fast instead of hanging lyrics.
+                int timeout = translationRequestTimeoutMs();
+                connection.setConnectTimeout(timeout);
+                connection.setReadTimeout(timeout);
                 java.io.OutputStream out = connection.getOutputStream();
                 out.write(attempt.toString().getBytes("UTF-8"));
                 out.flush();

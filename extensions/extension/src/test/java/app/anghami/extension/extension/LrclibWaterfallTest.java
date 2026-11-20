@@ -50,4 +50,34 @@ public class LrclibWaterfallTest {
                 .put("trackName", "Song").put("artistName", "Artist").put("duration", 185.0);
         assertEquals("Song — Artist (3:05)", LrclibFallback.candidateLabel(candidate));
     }
+
+    @Test
+    public void durationRuleAcceptsEqualAndLongerCandidates() {
+        assertTrue(LrclibFallback.durationMatches(180f, 180000L));   // equal
+        assertTrue(LrclibFallback.durationMatches(180f, 185000L));   // +5s
+        assertTrue(LrclibFallback.durationMatches(180f, 210000L));   // +30s bound
+        assertFalse(LrclibFallback.durationMatches(180f, 210001L));  // absurdly long
+        assertTrue(LrclibFallback.durationMatches(180f, 172000L));   // -8s old tolerance
+        assertFalse(LrclibFallback.durationMatches(180f, 171999L));  // too short
+        assertTrue(LrclibFallback.durationMatches(180f, 0L));        // unknown
+        assertTrue(LrclibFallback.durationMatches(0f, 180000L));     // unknown
+    }
+
+    @Test
+    public void candidateScoreKeepsLongerVersionsEligible() {
+        int exact = LrclibFallback.candidateScore("Song", "Artist", 180,
+                "Song", "Artist", 180);
+        int extended = LrclibFallback.candidateScore("Song", "Artist", 180,
+                "Song", "Artist", 192);
+        int absurd = LrclibFallback.candidateScore("Song", "Artist", 180,
+                "Song", "Artist", 300);
+        assertTrue(extended > 0);
+        assertTrue(exact > extended);
+        assertEquals(0, absurd);
+    }
+
+    @Test
+    public void translationRequestUsesTenSecondTimeout() {
+        assertEquals(10000, LrclibFallback.translationRequestTimeoutMs());
+    }
 }
