@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T08:14:10",
-  "description": "## [1.12.1](https://github.com/0xgalal/anghami-patches/compare/v1.12.0...v1.12.1) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* dismiss options dialog and use provider checklist ([43222c4](https://github.com/0xgalal/anghami-patches/commit/43222c4260caefe5b765e960ab7f011bb2990541))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.12.1/patches-1.12.1.mpp",
+  "created_at": "2026-11-20T08:18:49",
+  "description": "## [1.13.0](https://github.com/0xgalal/anghami-patches/compare/v1.12.1...v1.13.0) (2026-11-20)\n\n### ✨ New Features\n\n* refresh lyrics view while trying each provider ([b1d902b](https://github.com/0xgalal/anghami-patches/commit/b1d902bfe8940ec8b7dce20e429346c18e2ef784))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.13.0/patches-1.13.0.mpp",
   "signature_download_url": "",
-  "version": "1.12.1"
+  "version": "1.13.0"
 }

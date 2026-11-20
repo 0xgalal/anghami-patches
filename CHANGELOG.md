@@ -1,3 +1,9 @@
+## [1.13.0](https://github.com/0xgalal/anghami-patches/compare/v1.12.1...v1.13.0) (2026-11-20)
+
+### ✨ New Features
+
+* refresh lyrics view while trying each provider ([b1d902b](https://github.com/0xgalal/anghami-patches/commit/b1d902bfe8940ec8b7dce20e429346c18e2ef784))
+
 ## [1.12.1](https://github.com/0xgalal/anghami-patches/compare/v1.12.0...v1.12.1) (2026-11-20)
 
 ### 🐛 Bug Fixes
