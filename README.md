@@ -13,7 +13,7 @@ fails after patching.
 
 ### How to use these patches
 
-Click here to add these patches to Morphe: https://morphe.software/add-source?github=0xgalal/anghami-patches
+Click here to add these patches to Morphe: https://morphe.software/add-source?github=mohamedamrnady/anghami-patches
 
 Then in Morphe Manager (Expert Mode): pick the stock `the-stock-apk` + matching
 `arm64_v8a` + dpi splits (or a merged APK), select the patches below, and install.
@@ -22,9 +22,9 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.17.1](https://github.com/0xgalal/anghami-patches/releases/tag/v1.17.1)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;21 patches total
+> **[v1.3.0](https://github.com/mohamedamrnady/anghami-patches/releases/tag/v1.3.0)**&nbsp;&nbsp;•&nbsp;&nbsp;`main`&nbsp;&nbsp;•&nbsp;&nbsp;18 patches total
 <details open>
-<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;21 patches</summary>
+<summary>📦 Anghami&nbsp;&nbsp;•&nbsp;&nbsp;18 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -34,7 +34,6 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 
 | 💊&nbsp;Patch | 📜&nbsp;Description | ⚙️&nbsp;Options |
 |----------|----------------|-----------|
-| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
@@ -43,15 +42,13 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 | [Hide upgrade upsell](#hide-upgrade-upsell) | Hides the nav upgrade entry, header promo banner, feed upsell cards and AI MIX button model (gap-free), and settings subscribe banner. Server-driven UI the Plus spoof cannot remove. |  |
 | [Hide upsell feature buttons](#hide-upsell-feature-buttons) | Hides TRY SING ALONG karaoke upsell, disables the karaoke feature itself, and hides the player/playlist AI MIX buttons. Feature UI stays hidden rather than paywalled. |  |
 | [LRCLIB lyrics fallback](#lrclib-lyrics-fallback) | When the server returns truncated/empty lyrics, fetches the full text from LRCLIB (opt-in free source) into a separate cache. Native full lyrics and the Plus path are untouched. |  |
+| [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
 | [Monet dynamic colors](#monet-dynamic-colors) | Replaces the static neon brand accents with wallpaper-based Monet dynamic colors (M3 Expressive primary/secondary/tertiary roles) on Android 12+. Older versions keep stock colors. |  |
 | [Player theme](#player-theme) | Night-only player theme: removes the cover-art tint and paints the now-playing row, pills and action icons with the primary accent at night; day mode keeps the stock tinted player. Pulls in 'Player theme background' resources. |  |
 | [Player theme background](#player-theme-background) | Makes the player background, text, icons and seekbar follow the app's day/night theme. Keeps the darker split below the progress bar. Pair with 'Player theme'. |  |
 | [Remove popup promos](#remove-popup-promos) | No-ops the in-house popup funnel, the fullscreen startup dialog, and the flyer ad callback. Google SDK ads untouched. |  |
-| [Remove startup login + self-restart](#remove-startup-login-self-restart) | Skips the stock self-restart in BaseActivity.onResume and forces MainActivity's login gate false on startup. Client-side only; no session is created, so server-backed data may still fail. |  |
 | [Spoof stock app signature](#spoof-stock-app-signature) | Forces SignatureUtils.getAppSignature to hash with the stock cert prefix (he9B...kw=), so X-ANGH-APP-RGSIG matches a stock install. Salt/body hashing unchanged. |  |
-| [Theme row title](#theme-row-title) | Retitles the runtime Theme settings row to 'THEME' by repurposing the unused dummy_tag_1 string resource. |  |
-| [Theme section in Settings](#theme-section-in-settings) | Adds a Theme section to Settings with six presets (Tokyo Nights, Neon Sunset, Midnight Ocean, Forest Glow, Rose Quartz, Default) for the app chrome and player. |  |
-| [Unforce shuffle](#unforce-shuffle) | Forces server shuffleOn=false, blocks client-reported skip-limit similar-song fallback, disables the pick-a-song radio redirect, and enables shuffle buttons without breaking manual or header Shuffle. |  |
+| [Unforce shuffle](#unforce-shuffle) | Forces server shuffleOn=false at both sync points, never reports shuffle to the server, disables the pick-a-song radio redirect, enables shuffle buttons, and disarms the shuffle upsell dialog. Manual shuffle toggle and the header Shuffle button keep working. |  |
 | [Unlock downloads](#unlock-downloads) | No-ops download limit asserts, forces limited-plan=false and large offline caps (999999). Local gates only; the server still authorizes files. |  |
 | [Unlock local Plus](#unlock-local-plus) | Forces Account.isPlus/isPlusUser=true, enablePlayerRestrictions=false, canPlayOfflineAndFree=true. Local UI/gating only; server premium checks remain. |  |
 | [Unlock playback limits](#unlock-playback-limits) | Disables skip and queue limits (skipLimitReached/queueRestrictionsEnabled=false, disable-flags=true). Local gates only. |  |
@@ -149,52 +146,6 @@ system prompt, and cached translations are stored in app-private preferences.
 Translations are cached by lyric, provider, model, target language, and system prompt;
 only uncached lyrics are sent to the selected provider.
 
-### Theme section in Settings
-
-**Theme section in Settings** adds a **Theme** row to Anghami's native Settings
-page (next to the Music section). Opening it offers six presets:
-
-| Preset | Look |
-|--------|------|
-| Tokyo Nights | Deep indigo with neon pink and cyan accents |
-| Neon Sunset | Warm dark plum with orange and amber accents |
-| Midnight Ocean | Deep navy with blue and teal accents |
-| Forest Glow | Deep green with mint and lime accents |
-| Rose Quartz | Dark rose with pink and blush accents |
-| Default | The app's original baseline colors — no theme overlay |
-
-A preset recolors the app chrome (status and navigation bars on every screen)
-and the player surface (root background and the Lyrics / Queue control-row
-accents). It is stored in app-private preferences, so changing it takes effect
-immediately and survives restarts. This is a runtime overlay — the existing
-build-time **Player theme** / **Player theme background** palettes are left
-untouched, so both can be enabled together.
-
-**Default** is appended as the last choice (stored id `5`), so theme ids `0`–`4`
-saved by older builds keep pointing at the same five themes. It applies no
-colors: selecting it restores the original window, status/navigation bar, view
-background, text, button and card colors captured when the previous theme was
-applied, and stops all further tinting. It behaves the same in dark and light
-system modes — neither mode gets an overlay.
-
-### Startup: login screen and self-restart
-
-**Remove startup login + self-restart** addresses two device reports on 8.0.28:
-
-- The login prompt is Anghami's own startup gate, not a patch side effect.
-  `MainActivity.onCreate` stores a boolean (`MainActivity.J`) meaning "no
-  session"; when it is true the activity redirects to `LoginActivity`. The
-  patch forces that flag false so the normal home screen opens directly.
-- The self-restart is also stock: `BaseActivity.onResume` calls
-  `BaseActivity.restartApp()` (`finishAffinity()` + relaunch `MainActivity`)
-  when cached Google/HMS availability codes change. The patch turns that
-  helper into a no-op.
-
-This is a client-side bypass only — it removes the prompt, it does not create a
-session. A repackaged APK still has a different signing certificate, so server
-authentication and server-gated content can keep failing. Keep "Spoof stock app
-signature" enabled if you rely on server requests succeeding.
-
 ### 🛠️ Building locally
 
 - Run `./gradlew buildAndroid`
@@ -212,12 +163,6 @@ streaming service can violate its Terms of Service — use a throwaway account,
 expect server-gated features (full lyrics, high-quality streams, downloads) to
 keep failing, and do not redistribute patched APKs as "Premium Unlocked".
 
-## AI Disclousre and Contribution
-
-The code in this repo is written using Frontier LLMs, planned and stress-tested by a human. Feel free to report bugs, request features and open pull requests within the acceptable scope of Morphe and ToS of Anghami.
-
 ## 📜 License
 
 Anghami patches by Nady are licensed under the [GNU General Public License v3.0](LICENSE)
-
-anghami-patches is an independent project and is not affiliated with Anghami. Anghami is a trademark of Anghami Inc.

@@ -27,7 +27,7 @@ import app.morphe.patcher.patch.resourcePatch
 val amoledBlackPatch = resourcePatch(
     name = "AMOLED black background",
     description = "Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched.",
-    default = true,
+    default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
 

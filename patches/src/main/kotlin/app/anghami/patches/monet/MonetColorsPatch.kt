@@ -66,7 +66,7 @@ import app.anghami.patches.shared.Constants.COMPATIBILITY_ANGHAMI_8_0_28
 val monetColorsPatch = resourcePatch(
     name = "Monet dynamic colors",
     description = "Replaces the static neon brand accents with wallpaper-based Monet dynamic colors (M3 Expressive primary/secondary/tertiary roles) on Android 12+. Older versions keep stock colors.",
-    default = true,
+    default = false,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
 

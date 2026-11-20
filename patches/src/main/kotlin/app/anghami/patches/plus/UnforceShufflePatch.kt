@@ -31,11 +31,6 @@ import com.android.tools.smali.dexlib2.iface.reference.FieldReference
  * 4. Shuffle upsell dialog disarm: RadioPlayQueue.shouldShowShuffleMessage()
  *    (the only true override; base is false) is forced false, so
  *    maybeShowShuffleMessage() can never pop the free-user shuffle dialog.
- * 5. Client-reported skip-limit fallback: playlist/album song requests set
- *    `skiplimitreached=1` through PlayQueueManager.skipLimitReached(), which
- *    makes the server return similar songs instead of the requested song.
- *    This patch depends on Unlock Playback Limits, which forces that helper
- *    false as well as the underlying per-queue checks.
  *
  * Deliberately NOT hooked: `PlayQueue.shuffle()`V. The v1 no-op is not
  * restored because the "Header Play + Shuffle" patch routes its Shuffle
@@ -77,11 +72,10 @@ import com.android.tools.smali.dexlib2.iface.reference.FieldReference
 @Suppress("unused")
 val unforceShufflePatch = bytecodePatch(
     name = "Unforce shuffle",
-    description = "Forces server shuffleOn=false, blocks client-reported skip-limit similar-song fallback, disables the pick-a-song radio redirect, and enables shuffle buttons without breaking manual or header Shuffle.",
+    description = "Forces server shuffleOn=false at both sync points, never reports shuffle to the server, disables the pick-a-song radio redirect, enables shuffle buttons, and disarms the shuffle upsell dialog. Manual shuffle toggle and the header Shuffle button keep working.",
     default = true,
 ) {
     compatibleWith(COMPATIBILITY_ANGHAMI_8_0_28)
-    dependsOn(unlockPlaybackLimitsPatch)
 
     execute {
         // Replace the single `iget-boolean <reg>, ...;->shuffleOn:Z` with
@@ -107,13 +101,16 @@ val unforceShufflePatch = bytecodePatch(
             }
             method.replaceInstructions(matches[0], "const/4 $register, 0x0")
         }
-        // Local-authoritative index in updateFromSocketPayload: the server
-        // index is also used by the following bounds check, even if its
-        // subsequent write to PlayQueue.index is nopped. Read the live local
-        // index into that register instead, then nop the write. Otherwise an
-        // out-of-range stale server index still trips the clamp and resets
-        // the current local position to zero. Locate both instructions by
-        // their fields and fail loudly if the expected adjacent copy changes.
+        // Local-authoritative index: nop the unconditional
+        // `iget vX, p1, ServerPlayQueue;->index` -> `iput vX, p0,
+        // PlayQueue;->index` copy in updateFromSocketPayload (same method as
+        // the socket shuffle hook above). Located by pattern: the server-
+        // side iget is the only `index` iget off ServerPlayQueue (the rest
+        // read the local field), and the very next instruction must be its
+        // iput — fail loudly otherwise. Label-safe: neither instruction
+        // carries a branch label (both sit between `if-nez :cond_3` and the
+        // bounds check). The OOB-clamp below then validates the LOCAL index
+        // (always in range — we just set it) instead of the server's.
         run {
             val method = SocketPayloadShuffleFingerprint.method
             val insns = method.implementation!!.instructions
@@ -132,24 +129,12 @@ val unforceShufflePatch = bytecodePatch(
             check(gets.size == 1) {
                 "expected exactly 1 ServerPlayQueue.index iget, found ${gets.size}"
             }
-            val serverIndexGet = insns[gets[0]] as Instruction22c
-            check(serverIndexGet.opcode == Opcode.IGET) {
-                "expected ServerPlayQueue.index to be read with iget"
-            }
             val next = insns[gets[0] + 1]
             check(next.opcode == Opcode.IPUT && next is Instruction22c &&
-                (next.reference as? FieldReference)?.name == "index" &&
-                (next.reference as? FieldReference)?.definingClass ==
-                "Lcom/anghami/odin/playqueue/PlayQueue;" &&
-                next.registerA == serverIndexGet.registerA
+                (next.reference as? FieldReference)?.name == "index"
             ) {
                 "expected PlayQueue.index iput right after the server iget"
             }
-            method.replaceInstructions(
-                gets[0],
-                "iget v${serverIndexGet.registerA}, p0, " +
-                    "Lcom/anghami/odin/playqueue/PlayQueue;->index:I"
-            )
             method.replaceInstructions(gets[0] + 1, "nop")
         }
         // Never report shuffle (2026-10-05): nop the `if isShuffleMode():
@@ -238,7 +223,7 @@ val unforceShufflePatch = bytecodePatch(
                 move-result v1
                 if-eqz v1, :noexpand_allow
                 instance-of v0, p0, Lcom/anghami/odin/playqueue/SongPlayqueue;
-                if-eqz v0, :noexpand_isradio
+                if-nez v0, :noexpand_isradio
                 goto :noexpand_block
                 :noexpand_isradio
                 instance-of v0, p0, Lcom/anghami/odin/playqueue/RadioPlayQueue;
@@ -252,46 +237,5 @@ val unforceShufflePatch = bytecodePatch(
                 :noexpand_allow
             """
         )
-        // A rebuilt queue inherits shuffle from the queue it was copied from
-        // via `commonFillPlayQueue` (used by getCopy/getPerfectCopy when the
-        // player rebuilds for a previous/next song). Verified in 8.0.28: the
-        // single `iget-boolean v0, p0, ...isShuffleMode` is followed by
-        // `iput-boolean v0, p1, ...isShuffleMode`. NOP the label-free iput so
-        // the rebuilt queue keeps its default (off) — returning to a previous
-        // song must not flip shuffle back on and jump to a random next song.
-        //
-        // LABEL RULE: the iget directly above sits under `:cond_0`, so it must
-        // NOT be replaced — Morphe's remove+add orphans the label onto the
-        // next instruction, which makes the branch skip this setup with a
-        // stale object register and crashes the app on launch.
-        run {
-            val method = CommonFillPlayQueueFingerprint.method
-            val insns = method.implementation!!.instructions
-            val gets = insns.mapIndexedNotNull { index, ins ->
-                if (ins.opcode == Opcode.IGET_BOOLEAN && ins is Instruction22c &&
-                    (ins.reference as? FieldReference)?.name == "isShuffleMode" &&
-                    (ins.reference as? FieldReference)?.definingClass ==
-                    "Lcom/anghami/odin/playqueue/PlayQueue;"
-                ) {
-                    index
-                } else {
-                    null
-                }
-            }
-            check(gets.size == 1) {
-                "expected exactly 1 isShuffleMode iget in commonFillPlayQueue, found ${gets.size}"
-            }
-            val dest = (insns[gets[0]] as Instruction22c).registerA
-            val nextIndex = gets[0] + 1
-            val next = insns[nextIndex]
-            check(next.opcode == Opcode.IPUT_BOOLEAN && next is Instruction22c &&
-                (next.reference as? FieldReference)?.name == "isShuffleMode" &&
-                next.registerA == dest
-            ) {
-                "expected matching isShuffleMode iput after the iget in commonFillPlayQueue"
-            }
-            // The iput has no branch label on it; nopping it is verifier-safe.
-            method.replaceInstructions(nextIndex, "nop")
-        }
     }
 }
