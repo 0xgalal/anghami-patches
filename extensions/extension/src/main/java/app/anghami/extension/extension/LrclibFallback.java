@@ -188,14 +188,13 @@ public final class LrclibFallback {
     }
 
     /**
-     * Holds native lyrics for automatic translation without aborting the
-     * native render. Returning early from {@code A7/E.b} used to skip its
-     * loading-state cleanup, leaving the spinner up forever. Instead the
-     * source lines are captured and the response is rewritten in place with
-     * a short pending message, so the native method renders that message and
-     * completes normally; the dual-line render replaces it once translation
-     * finishes. Truncated/empty responses are left untouched so the LRCLIB
-     * fallback can still fetch full lyrics for them.
+     * Starts automatic translation for full native lyrics without touching
+     * the response. Native rendering must complete normally so the lyrics
+     * appear as soon as the song loads; the dual-line render replaces them
+     * in place when the translation finishes. Holding the response behind a
+     * pending message left the screen empty whenever that render was late,
+     * which forced the user to leave and re-open the song to see anything.
+     * Truncated/empty responses are left to the LRCLIB fallback chain.
      */
     public static void deferLyricsForTranslation(Object songObj, Object responseObj,
                                                  Object callbackObj) {
@@ -204,16 +203,7 @@ public final class LrclibFallback {
             Context ctx = appContextOf(callbackObj);
             if (!hasConfiguredAutomaticTranslation(ctx)) return;
             if (!isFullNativeResponse(responseObj)) return;
-            if (!captureNativeLyrics(songObj, responseObj, callbackObj)) return;
-
-            setLineField(responseObj, "lyricsUnsynced", tr("translation_pending"));
-            setLineField(responseObj, "lyricsSynced", null);
-            setLineField(responseObj, "isSynced", false);
-            setLineField(responseObj, "truncated", true);
-            synchronized (LrclibFallback.class) {
-                substituted.add(responseObj); // impl must not re-own this response.
-            }
-            Log.d(TAG, "native lyrics held for automatic translation");
+            captureNativeLyrics(songObj, responseObj, callbackObj);
         } catch (Throwable t) {
             Log.d(TAG, "deferLyricsForTranslation failed: " + t);
         }
@@ -3807,7 +3797,13 @@ public final class LrclibFallback {
                 }
             } catch (Exception ignored) {
             }
-            invokeRender(callback, song, displayLines, response);
+            // The translation can finish long after the lyrics view was
+            // recreated. Render into the newest callback registered for this
+            // song so the update lands on the visible player instead of a
+            // detached view.
+            Object latest = callbackForSong(song);
+            if (latest == null) latest = callback;
+            invokeRender(latest, song, displayLines, response);
             Log.d(TAG, hasTranslation
                     ? "Dual-line translation rendered"
                     : "Original lyrics restored after automatic translation");
