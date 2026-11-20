@@ -352,6 +352,80 @@ public class TranslationRequestTest {
     }
 
     @Test
+    public void cloudflareRecoversUnterminatedFinalString() throws Exception {
+        // Reproduces the device report: org.json throws
+        // "Unterminated string at character 660 of ..." when the model's
+        // output is cut off in the middle of the last array element.
+        StringBuilder filler = new StringBuilder();
+        while (filler.length() < 620) filler.append('x');
+        String content = "{\"lines\":[\"Bonjour\",\"Monde\",\"Au revoir\",\"" + filler;
+        assertTrue("expected ~660 chars, got " + content.length(),
+                content.length() >= 650 && content.length() < 700);
+        assertEquals(Arrays.asList("Bonjour", "Monde", "Au revoir", filler.toString()),
+                translateCloudflareWithSource(content, sourceWithLines(4)));
+        assertEquals(1, connections.size());
+    }
+
+    @Test
+    public void cloudflareRecoversRawNewlineInsideJsonString() throws Exception {
+        String content = "{\"lines\":[\"Bonjour\nle monde\",\"Au revoir\"]}";
+        assertEquals(Arrays.asList("Bonjour le monde", "Au revoir", ""),
+                translateCloudflareWithSource(content, sourceWithLines(3)));
+    }
+
+    @Test
+    public void cloudflareSalvageAcceptsLegacyTranslationsKeyWithRawNewline() throws Exception {
+        String content = "{\"translations\":[\"Bonjour\nmonde\",\"Au revoir\"]}";
+        assertEquals(Arrays.asList("Bonjour monde", "Au revoir"),
+                translateCloudflareWithSource(content, sourceWithLines(2)));
+    }
+
+    @Test
+    public void cloudflareRecoversTrailingCommaInLinesArray() throws Exception {
+        assertEquals(Arrays.asList("Bonjour", "Monde"),
+                translateCloudflareWithSource("{\"lines\":[\"Bonjour\",\"Monde\",]}",
+                        sourceWithLines(2)));
+    }
+
+    @Test
+    public void cloudflareRecoversUnescapedQuoteInsideString() throws Exception {
+        String content = "{\"lines\":[\"It's a \"quote\" line\",\"Deuxième\"]}";
+        assertEquals(Arrays.asList("It's a \"quote\" line", "Deuxième"),
+                translateCloudflareWithSource(content, sourceWithLines(2)));
+    }
+
+    @Test
+    public void cloudflareRecoversFencedJsonSurroundedByProse() throws Exception {
+        String content = "Sure, here it is:\n```json\n{\"lines\":[\"Bonjour\",\"Monde\"]}\n```\n"
+                + "Let me know if you need anything else!";
+        assertEquals(Arrays.asList("Bonjour", "Monde"),
+                translateCloudflareWithSource(content, sourceWithLines(2)));
+    }
+
+    @Test
+    public void cloudflareAcceptsBareArrayResponse() throws Exception {
+        assertEquals(Arrays.asList("Bonjour", "Monde"),
+                translateCloudflareWithSource("[\"Bonjour\",\"Monde\"]", sourceWithLines(2)));
+    }
+
+    @Test
+    public void cloudflareRecoversTruncatedResponseEnvelope() throws Exception {
+        String valid = cloudflareResponse("{\"lines\":[\"Bonjour\",\"Monde\",\"Au revoir\"]}");
+        int cut = valid.indexOf("Au revoir") + "Au revoir".length();
+        String truncated = valid.substring(0, cut); // cuts inside the envelope's string
+        responses.add(new Response(200, truncated));
+        assertEquals(Arrays.asList("Bonjour", "Monde", "Au revoir", ""),
+                invokeCloudflareRequest("cf-token", "acct123", sourceWithLines(4)));
+    }
+
+    @Test
+    public void cloudflareUnrecoverableTextFallsBackToPlainLines() throws Exception {
+        String content = "Bonjour le monde\n\nAu revoir\nThis is not JSON at all";
+        assertEquals(Arrays.asList("Bonjour le monde", "Au revoir"),
+                translateCloudflareWithSource(content, sourceWithLines(2)));
+    }
+
+    @Test
     public void cloudflareReportsFailureEnvelopeWithUsefulMessage() {
         responses.add(new Response(403, "{\"success\":false,\"errors\":[{\"code\":10000,"
                 + "\"message\":\"Invalid API token\"}],\"messages\":[]}"));
@@ -391,14 +465,35 @@ public class TranslationRequestTest {
     }
 
     private static List<?> translateCloudflare(String key, String accountId) throws Exception {
+        return invokeCloudflareRequest(key, accountId,
+                (List<?>) parseLyrics.invoke(null, "[00:01.00]Hello"));
+    }
+
+    private static List<?> translateCloudflareWithSource(String content, List<?> source)
+            throws Exception {
+        responses.add(new Response(200, cloudflareResponse(content)));
+        return invokeCloudflareRequest("cf-token", "acct123", source);
+    }
+
+    private static List<?> invokeCloudflareRequest(String key, String accountId, List<?> source)
+            throws Exception {
         try {
             return (List<?>) requestWithAccount.invoke(null, TranslationProvider.CLOUDFLARE,
-                    key, accountId, TranslationProvider.CLOUDFLARE.defaultModel, null,
-                    "French", "", parseLyrics.invoke(null, "[00:01.00]Hello"));
+                    key, accountId, TranslationProvider.CLOUDFLARE.defaultModel,
+                    null, "French", "", source);
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
             throw e;
         }
+    }
+
+    private static List<?> sourceWithLines(int count) throws Exception {
+        StringBuilder plain = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            if (i > 0) plain.append('\n');
+            plain.append("Source").append(i);
+        }
+        return (List<?>) parsePlainLyrics.invoke(null, plain.toString());
     }
 
     private static String cloudflareSuccess(String... lines) throws Exception {
