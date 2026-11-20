@@ -1,3 +1,9 @@
+## [1.11.2](https://github.com/0xgalal/anghami-patches/compare/v1.11.1...v1.11.2) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* render lyrics immediately with auto-translate enabled ([461cb54](https://github.com/0xgalal/anghami-patches/commit/461cb541137ba2b1ac781cbd9402f08f02f8831a))
+
 ## [1.11.1](https://github.com/0xgalal/anghami-patches/compare/v1.11.0...v1.11.1) (2026-11-20)
 
 ### 🐛 Bug Fixes
