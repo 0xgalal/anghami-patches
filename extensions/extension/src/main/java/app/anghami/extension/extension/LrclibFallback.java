@@ -3647,24 +3647,72 @@ public final class LrclibFallback {
         return count;
     }
 
-    private static boolean isArabicScriptSource(List<Line> lines) {
-        int arabicLetters = 0;
-        int allLetters = 0;
-        if (lines == null) return false;
-        for (Line line : lines) {
-            if (line == null || line.text == null) continue;
-            for (int offset = 0; offset < line.text.length();) {
-                int codePoint = line.text.codePointAt(offset);
-                offset += Character.charCount(codePoint);
-                if (!Character.isLetter(codePoint)) continue;
-                allLetters++;
-                if (Character.UnicodeScript.of(codePoint)
-                        == Character.UnicodeScript.ARABIC) {
-                    arabicLetters++;
-                }
+    /**
+     * True when a single lyric line contains at least one Arabic letter.
+     * Digits, punctuation and diacritics are not letters and do not count;
+     * UnicodeScript covers the Arabic block (U+0600..U+06FF), its supplement
+     * and extended blocks, and the Arabic presentation forms. A mixed line
+     * (Arabic plus, say, English words) counts as Arabic so its original text
+     * is never rewritten by the translation model.
+     */
+    static boolean isArabicScriptLine(String text) {
+        if (text == null || text.isEmpty()) return false;
+        for (int offset = 0; offset < text.length();) {
+            int codePoint = text.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isLetter(codePoint)
+                    && Character.UnicodeScript.of(codePoint)
+                    == Character.UnicodeScript.ARABIC) {
+                return true;
             }
         }
-        return arabicLetters >= 3 && arabicLetters * 2 >= allLetters;
+        return false;
+    }
+
+    /** True only when there is nothing to translate: every non-blank line is Arabic script. */
+    static boolean allArabicScriptLines(List<Line> lines) {
+        if (lines == null || lines.isEmpty()) return false;
+        for (Line line : lines) {
+            String text = line == null ? null : line.text;
+            if (text == null || text.trim().isEmpty()) continue;
+            if (!isArabicScriptLine(text)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Authoritative per-line passthrough: Arabic-script source lines keep their
+     * exact original text regardless of what the model returned, while every
+     * other line uses the translated text. Always returns one entry per source
+     * line, in source order, so dual-line rendering stays aligned.
+     */
+    static List<String> preserveArabicLines(List<Line> source, List<String> translated) {
+        List<String> out = new ArrayList<String>();
+        if (source == null) return out;
+        for (int i = 0; i < source.size(); i++) {
+            Line line = source.get(i);
+            String original = line == null || line.text == null ? "" : line.text;
+            if (isArabicScriptLine(original)) {
+                out.add(original);
+                continue;
+            }
+            String value = translated != null && i < translated.size()
+                    ? translated.get(i) : null;
+            out.add(value == null ? "" : value);
+        }
+        return out;
+    }
+
+    /**
+     * Render one displayed lyric line. An Arabic-script source always shows its
+     * original text alone, so a passthrough entry is never displayed twice as
+     * "original + translation"; other lines use the usual dual-line form.
+     */
+    static String displayLineText(String original, String translation) {
+        String text = original == null ? "" : original;
+        if (isArabicScriptLine(text)) return text;
+        String value = translation == null ? "" : translation;
+        return value.trim().isEmpty() ? text : text + "\n" + value;
     }
 
     private static boolean hasConfiguredAutomaticTranslation(Context ctx) {
@@ -3681,7 +3729,7 @@ public final class LrclibFallback {
                 && !settings.model.trim().isEmpty()
                 && !settings.language.trim().isEmpty()
                 && snapshot != null && !snapshot.lines.isEmpty()
-                && !isArabicScriptSource(snapshot.lines)
+                && !allArabicScriptLines(snapshot.lines)
                 && snapshot.lines.size() <= MAX_TRANSLATION_LINES
                 && sourceCharacterCount(snapshot.lines) <= MAX_TRANSLATION_CHARS;
     }
@@ -3741,7 +3789,7 @@ public final class LrclibFallback {
             }
             return;
         }
-        if (isArabicScriptSource(snapshot.lines)) {
+        if (allArabicScriptLines(snapshot.lines)) {
             if (interactive) {
                 Toast.makeText(ctx, tr("arabic_source_skipped"),
                         Toast.LENGTH_SHORT).show();
@@ -3839,7 +3887,8 @@ public final class LrclibFallback {
                                 if (!interactive) renderOriginalLyricsIfCurrent(song, current);
                                 return;
                             }
-                            renderDualLines(song, current.callback, snapshot, result);
+                            renderDualLines(song, current.callback, snapshot,
+                                    preserveArabicLines(snapshot.lines, result));
                             if (interactive) {
                                 Toast.makeText(ctx, tr("translation_done"),
                                         Toast.LENGTH_SHORT).show();
@@ -3893,7 +3942,9 @@ public final class LrclibFallback {
                 + "pronouns, idioms, references, tone, and ambiguity. Make translations natural "
                 + "for music listening while staying faithful to meaning, tense, names, "
                 + "punctuation, and repeated hooks. Preserve text already in the target language "
-                + "verbatim, including target-language parts of mixed lines.";
+                + "verbatim, including target-language parts of mixed lines. Lines written in "
+                + "Arabic script are copied back verbatim and their translation ignored; still "
+                + "return one entry per input line.";
         String custom = trimOrEmpty(customPrompt);
         if (!custom.isEmpty()) {
             instructions += ADDITIONAL_PROMPT_MARKER + custom;
@@ -4185,9 +4236,10 @@ public final class LrclibFallback {
                 Line original = source.lines.get(i);
                 String translation = translated.get(i) == null ? "" : translated.get(i);
                 String text = original.text == null ? "" : original.text;
-                if (!translation.trim().isEmpty()) hasTranslation = true;
-                String dual = translation.trim().isEmpty()
-                        ? text : text + "\n" + translation;
+                if (!isArabicScriptLine(text) && !translation.trim().isEmpty()) {
+                    hasTranslation = true;
+                }
+                String dual = displayLineText(original.text, translation);
                 Object line = lineClass.newInstance();
                 setLineField(line, "line", dual);
                 setLineField(line, "milliseconds", original.ms);
