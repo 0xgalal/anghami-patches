@@ -164,6 +164,11 @@ public final class LrclibFallback {
     private static final List<Line> translationSourceLines = new ArrayList<Line>();
     private static final Set<String> translationRequestsInFlight =
             new HashSet<String>();
+    // A cached "no lyrics" still gets one background re-check per cooldown
+    // window, so a source recovering later updates the view on its own.
+    private static final Map<String, Long> missRetryTimes =
+            new java.util.HashMap<String, Long>();
+    private static final long MISS_RETRY_COOLDOWN_MS = 60L * 1000;
 
     // ================= entry points =================
 
@@ -503,6 +508,39 @@ public final class LrclibFallback {
         }
     }
 
+    private static boolean shouldRetryMiss(String key) {
+        synchronized (LrclibFallback.class) {
+            Long last = missRetryTimes.get(key);
+            if (last != null && System.currentTimeMillis() - last < MISS_RETRY_COOLDOWN_MS) {
+                return false;
+            }
+            missRetryTimes.put(key, System.currentTimeMillis());
+            return true;
+        }
+    }
+
+    private static void retryMissInBackground(final Context ctx, final Object songObj,
+                                              final SongInfo song, final Object callback,
+                                              final String key) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Result r;
+                try {
+                    r = waterfall(song);
+                } catch (Throwable t) {
+                    return;
+                }
+                if (r == null) return;
+                writePositiveCache(ctx, key, r);
+                remember(r.queryUsed, r.source, r.plain, r.synced);
+                // renderOnMain resolves the live callback and starts automatic
+                // translation when it is enabled.
+                renderOnMain(ctx, songObj, callback, r.plain, r.synced, r.queryUsed, false);
+            }
+        }).start();
+    }
+
     private static void impl(Object songObj, Object responseObj, Object callbackObj) {
         try {
             if (songObj == null || callbackObj == null) return;
@@ -535,6 +573,14 @@ public final class LrclibFallback {
             if (hit != null) {
                 if (hit.miss) {
                     Log.d(TAG, "negative cache hit for songId=" + song.id);
+                    // "No lyrics found" is not final: keep searching in the
+                    // background so a source that came online later updates
+                    // the screen without the user re-opening the song.
+                    final Context retryCtx = ctx.getApplicationContext() != null
+                            ? ctx.getApplicationContext() : ctx;
+                    if (shouldRetryMiss(key)) {
+                        retryMissInBackground(retryCtx, songObj, song, callbackObj, key);
+                    }
                     // Still guide the user: the server view alone (teaser
                     // or empty) never mentions the Settings options.
                     // Full native responses returned above, so this is a
@@ -1179,6 +1225,11 @@ public final class LrclibFallback {
             if (fr) return "Options des paroles";
             return "Lyrics options";
         }
+        if ("lyrics_sources".equals(key)) {
+            if (ar) return "مصادر الكلمات";
+            if (fr) return "Sources des paroles";
+            return "Lyrics sources";
+        }
         if ("ai_note".equals(key)) {
             if (ar) return "ستظهر الترجمة أسفل كل سطر أصلي مع الحفاظ على التوقيت.";
             if (fr) return "La traduction apparaît sous chaque ligne originale, synchronisée.";
@@ -1532,7 +1583,49 @@ public final class LrclibFallback {
         String source = "";
     }
 
+    /** IDs used by the options dialog, in the order they are offered. */
+    static final String[] LYRIC_SOURCE_IDS = {
+            "lrclib", "kugou", "lyricsplus", "betterlyrics", "paxsenix"
+    };
+
+    static String sourceLabel(String id) {
+        if ("lrclib".equals(id)) return "LRCLIB";
+        if ("kugou".equals(id)) return "KuGou";
+        if ("lyricsplus".equals(id)) return "LyricsPlus";
+        if ("betterlyrics".equals(id)) return "Better Lyrics";
+        if ("paxsenix".equals(id)) return "Paxsenix";
+        return id;
+    }
+
+    /** Fetch from exactly one source; used by the manual lyrics options. */
+    static Result fromSource(SongInfo song, String source) {
+        if (song == null || source == null) return null;
+        if ("lrclib".equals(source)) return fromLrclib(song);
+        if ("kugou".equals(source)) return fromKugou(song);
+        if ("lyricsplus".equals(source)) return fromLyricsPlus(song);
+        if ("betterlyrics".equals(source)) return fromBetterLyrics(song);
+        if ("paxsenix".equals(source)) return fromPaxsenix(song);
+        return null;
+    }
+
     private static Result waterfall(SongInfo song) {
+        Result r = fromLrclib(song);
+        if (r != null) return r;
+        return fromExtendedSources(song);
+    }
+
+    /** Keep trying source after source until one returns usable lyrics. */
+    private static Result fromExtendedSources(SongInfo song) {
+        Result r = fromKugou(song);
+        if (r != null) return r;
+        r = fromLyricsPlus(song);
+        if (r != null) return r;
+        r = fromBetterLyrics(song);
+        if (r != null) return r;
+        return fromPaxsenix(song);
+    }
+
+    private static Result fromLrclib(SongInfo song) {
         String dur = song.hasDuration ? String.valueOf(Math.round(song.duration)) : null;
         List<String[]> pairs = waterfallPairs(song.title, song.artist);
 
@@ -1557,20 +1650,7 @@ public final class LrclibFallback {
         float duration = song.hasDuration ? song.duration : -1;
         Result r = apiSearchFielded(title, artist, duration);
         if (r != null) return r;
-        r = apiSearchQ(title, artist, duration);
-        if (r != null) return r;
-
-        // LRCLIB came back empty. Walk the extra sources in priority order;
-        // the first one with usable synced lyrics wins. Each source is
-        // self-contained and swallows its own failures so one dead endpoint
-        // cannot stop the rest of the chain.
-        r = fromKugou(song);
-        if (r != null) return r;
-        r = fromLyricsPlus(song);
-        if (r != null) return r;
-        r = fromBetterLyrics(song);
-        if (r != null) return r;
-        return fromPaxsenix(song);
+        return apiSearchQ(title, artist, duration);
     }
 
     /**
@@ -2404,6 +2484,9 @@ public final class LrclibFallback {
         final android.widget.Button searchBtn = new android.widget.Button(ctx);
         searchBtn.setText(tr("search"));
         layout.addView(searchBtn);
+        final android.widget.Button sourcesBtn = new android.widget.Button(ctx);
+        sourcesBtn.setText(tr("lyrics_sources"));
+        layout.addView(sourcesBtn);
         final android.widget.Button translateBtn;
         if (aiSource != null) {
             translateBtn = new android.widget.Button(ctx);
@@ -2502,6 +2585,68 @@ public final class LrclibFallback {
                         });
                     }
                 }).start();
+            }
+        });
+        sourcesBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                final String a = artistEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
+                final String t = titleEdit.getText().toString().trim().toLowerCase(Locale.ROOT);
+                final Context c = v.getContext();
+                String[] labels = new String[LYRIC_SOURCE_IDS.length];
+                for (int i = 0; i < LYRIC_SOURCE_IDS.length; i++) {
+                    labels[i] = sourceLabel(LYRIC_SOURCE_IDS[i]);
+                }
+                new AlertDialog.Builder(c)
+                        .setTitle(tr("lyrics_sources"))
+                        .setItems(labels, new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int which) {
+                                final String sourceId = LYRIC_SOURCE_IDS[which];
+                                d.dismiss();
+                                Toast.makeText(c, tr("searching"), Toast.LENGTH_SHORT).show();
+                                new Thread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        SongInfo s = new SongInfo();
+                                        try {
+                                            s.id = String.valueOf(getFieldUp(song, "id"));
+                                        } catch (Exception ignored) {
+                                        }
+                                        s.artist = a;
+                                        s.title = t;
+                                        s.duration = info.duration;
+                                        s.hasDuration = info.hasDuration;
+                                        final Result r = fromSource(s, sourceId);
+                                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                if (r == null) {
+                                                    Toast.makeText(c, tr("no_results"),
+                                                            Toast.LENGTH_SHORT).show();
+                                                    return;
+                                                }
+                                                try {
+                                                    writePositiveCache(
+                                                            c.getApplicationContext() != null
+                                                                    ? c.getApplicationContext() : c,
+                                                            cacheKey(readSong(song)), r);
+                                                } catch (Exception ignored) {
+                                                }
+                                                remember(r.queryUsed, r.source, r.plain, r.synced);
+                                                // renderOnMain starts automatic translation for
+                                                // this source and updates the visible view at once.
+                                                renderOnMain(c.getApplicationContext() != null
+                                                                ? c.getApplicationContext() : c,
+                                                        song, callback, r.plain, r.synced,
+                                                        r.queryUsed, true);
+                                            }
+                                        });
+                                    }
+                                }).start();
+                            }
+                        })
+                        .show();
             }
         });
         clearBtn.setOnClickListener(new View.OnClickListener() {
