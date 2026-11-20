@@ -2167,9 +2167,20 @@ public final class LrclibFallback {
     }
 
     private static void renderOnMain(final Context ctx, final Object songObj,
-                                     final Object callbackObj, final String plain,
+                                     Object callbackObj, final String plain,
                                      final String synced, final String queryUsed,
                                      final boolean toast) {
+        // A lookup can finish seconds after the lyrics view was recreated
+        // (switching songs and coming back). Rendering into the callback that
+        // was captured when the request started then updates a dead view:
+        // the screen stays empty until the cache is hit on the next open.
+        // Resolve the freshest registered callback for this song at render
+        // time so the result always lands on the view the user is looking at.
+        Object currentCallback = callbackForSong(songObj);
+        if (currentCallback != null) callbackObj = currentCallback;
+        final Object renderCallback = callbackObj;
+        if (renderCallback == null) return;
+
         // Idempotence: repeated API callbacks for the same song must not
         // re-render (and scroll-jump) an already-shown identical result.
         final String key;
@@ -2182,11 +2193,11 @@ public final class LrclibFallback {
             return;
         }
         synchronized (LrclibFallback.class) {
-            if (key.equals(renderedKeys.get(callbackObj))) {
+            if (key.equals(renderedKeys.get(renderCallback))) {
                 Log.d(TAG, "duplicate render skipped (" + queryUsed + ")");
                 return;
             }
-            renderedKeys.put(callbackObj, key);
+            renderedKeys.put(renderCallback, key);
         }
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
@@ -2214,12 +2225,12 @@ public final class LrclibFallback {
                                 sourceSynced = !sourceLines.isEmpty();
                             }
                             setTranslationSource(
-                                    readSong(songObj), songObj, callbackObj,
+                                    readSong(songObj), songObj, renderCallback,
                                     sourceLines, sourceSynced);
                         }
                     } catch (Exception ignored) {
                     }
-                    invokeRender(callbackObj, songObj, lines, response);
+                    invokeRender(renderCallback, songObj, lines, response);
                     Log.d(TAG, "fallback applied (" + queryUsed + ")");
                 } catch (Throwable t) {
                     Log.d(TAG, "render failed: " + t);
@@ -3667,26 +3678,53 @@ public final class LrclibFallback {
         } else {
             throw new Exception("Translation provider returned unsupported content");
         }
-        JSONObject result = new JSONObject(content);
-        JSONArray translated = result.optJSONArray("lines");
-        if (result.length() != 1 || translated == null
-                || translated.length() != source.size()) {
-            throw new Exception("Model returned a different number of lines");
+        // Be forgiving about the envelope: fenced markdown, extra keys, a
+        // bare array, or the older "translations" name are all acceptable.
+        // What matters is getting an array of strings we can align to the
+        // source. Models often return a slightly different count even with a
+        // strict prompt, so never fail the whole translation for that.
+        String json = content;
+        if (json.startsWith("```")) {
+            json = json.replaceFirst("^```(?:json)?\\s*", "")
+                    .replaceFirst("\\s*```$", "").trim();
+        }
+        JSONArray translated;
+        if (json.startsWith("[")) {
+            translated = new JSONArray(json);
+        } else {
+            JSONObject result = new JSONObject(json);
+            translated = result.optJSONArray("lines");
+            if (translated == null) translated = result.optJSONArray("translations");
+            if (translated == null) {
+                throw new Exception("Translation response contained no lines array");
+            }
+        }
+        // A model that ignored the schema sometimes returns one string with
+        // the whole translation separated by newlines. Split it back apart.
+        if (source.size() > 1 && translated.length() == 1) {
+            Object only = translated.opt(0);
+            if (only instanceof String && ((String) only).indexOf('\n') >= 0) {
+                String[] parts = ((String) only).split("\\r?\\n");
+                JSONArray split = new JSONArray();
+                for (String part : parts) split.put(part.trim());
+                translated = split;
+            }
         }
         List<String> out = new ArrayList<String>();
-        for (int i = 0; i < translated.length(); i++) {
-            Object value = translated.opt(i);
-            if (!(value instanceof String)) {
-                throw new Exception("Model returned a non-text lyric line");
-            }
-            String text = (String) value;
+        for (int i = 0; i < source.size(); i++) {
             boolean sourceBlank = source.get(i).text == null
                     || source.get(i).text.trim().isEmpty();
-            if (sourceBlank != text.trim().isEmpty()
-                    || text.indexOf('\n') >= 0 || text.indexOf('\r') >= 0) {
-                throw new Exception("Model returned misaligned lyric lines");
+            String text = "";
+            if (i < translated.length()) {
+                Object value = translated.opt(i);
+                if (value instanceof String) {
+                    text = ((String) value).replace('\r', ' ')
+                            .replace('\n', ' ').trim();
+                }
             }
-            out.add(sourceBlank ? "" : text);
+            // An empty translation renders the original line, which is the
+            // safest alignment when the model dropped or merged lines.
+            out.add(sourceBlank || text.isEmpty() ? "" : text);
         }
         return out;
     }

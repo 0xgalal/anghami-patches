@@ -204,12 +204,22 @@ public class TranslationRequestTest {
     }
 
     @Test
-    public void misalignedTranslationIsRejected() throws Exception {
+    public void extraTranslationLinesAreIgnored() throws Exception {
         responses.add(new Response(200, success("Bonjour", "Extra line")));
-        Exception error = assertThrows(Exception.class,
-                () -> translate(TranslationProvider.OPENCODE, "test-key"));
-        assertEquals("Model returned a different number of lines", error.getMessage());
+        assertEquals(Arrays.asList("Bonjour"),
+                translate(TranslationProvider.OPENCODE, "test-key"));
         assertEquals(1, connections.size());
+    }
+
+    @Test
+    public void missingTranslationLinesFallBackToOriginals() throws Exception {
+        List<?> source = (List<?>) parsePlainLyrics.invoke(null, "Hello\nWorld\nAgain");
+        responses.add(new Response(200, success("Bonjour")));
+        @SuppressWarnings("unchecked")
+        List<String> translated = (List<String>) request.invoke(null,
+                TranslationProvider.OPENROUTER, "test-key",
+                TranslationProvider.OPENROUTER.defaultModel, null, "French", "", source);
+        assertEquals(Arrays.asList("Bonjour", "", ""), translated);
     }
 
     @Test
@@ -265,25 +275,26 @@ public class TranslationRequestTest {
     }
 
     @Test
-    public void parserRejectsResponsesThatDoNotUseLinesObject() throws Exception {
+    public void parserAcceptsLegacyTranslationsKey() throws Exception {
         String legacyContent = new JSONObject()
                 .put("translations", new JSONArray().put("Bonjour")).toString();
         responses.add(new Response(200, completionWithContent(legacyContent)));
-        Exception error = assertThrows(Exception.class,
-                () -> translate(TranslationProvider.XKIRO, "test-key"));
-        assertEquals("Model returned a different number of lines", error.getMessage());
+        assertEquals(Arrays.asList("Bonjour"),
+                translate(TranslationProvider.XKIRO, "test-key"));
     }
 
     @Test
-    public void parserRejectsExtraKeysAndMarkdownWrappedJson() throws Exception {
+    public void parserAcceptsExtraKeysAndMarkdownWrappedJson() throws Exception {
         String extraKey = new JSONObject().put("lines", new JSONArray().put("Bonjour"))
                 .put("note", "Here is the translation").toString();
         responses.add(new Response(200, completionWithContent(extraKey)));
-        assertThrows(Exception.class, () -> translate(TranslationProvider.XKIRO, "test-key"));
+        assertEquals(Arrays.asList("Bonjour"),
+                translate(TranslationProvider.XKIRO, "test-key"));
 
         responses.add(new Response(200, completionWithContent(
                 "```json\n{\"lines\":[\"Bonjour\"]}\n```")));
-        assertThrows(Exception.class, () -> translate(TranslationProvider.XKIRO, "test-key"));
+        assertEquals(Arrays.asList("Bonjour"),
+                translate(TranslationProvider.XKIRO, "test-key"));
     }
 
     private static List<?> translate(TranslationProvider provider, String key) throws Exception {
