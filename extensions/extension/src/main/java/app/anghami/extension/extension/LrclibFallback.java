@@ -116,6 +116,25 @@ public final class LrclibFallback {
     private static final int CANDIDATE_DURATION_TOLERANCE_MS = 10000;
     private static final long LONGER_DURATION_TOLERANCE_MS = 30000L;
     private static final int TRANSLATION_TIMEOUT_MS = 10000;
+    // Long lyrics are translated in bounded batches. A single request that
+    // returns 80-150 translated lines routinely exceeds the output-token cap
+    // of small models — Cloudflare Workers AI in particular truncates early,
+    // which is exactly the "only part of the song translates" report: the
+    // salvage parser recovers only the first N lines and pads the rest with
+    // originals. Keeping each request small makes a complete, aligned answer
+    // the normal case. Cloudflare gets noticeably smaller batches than the
+    // OpenAI-compatible providers because its models have tighter caps.
+    private static final int BATCH_LINES_CLOUDFLARE = 10;
+    private static final int BATCH_CHARS_CLOUDFLARE = 1200;
+    private static final int BATCH_LINES_CLOUDFLARE_SMALL = 6;
+    private static final int BATCH_CHARS_CLOUDFLARE_SMALL = 800;
+    private static final int BATCH_LINES_SMALL_MODEL = 16;
+    private static final int BATCH_CHARS_SMALL_MODEL = 1800;
+    private static final int BATCH_LINES_STANDARD = 22;
+    private static final int BATCH_CHARS_STANDARD = 2500;
+    // Batching removes the need for a per-song size gate in normal use, but a
+    // generous absolute cap stays to bound cost/abuse (worst case ~40 batches,
+    // each with its own 10s timeout; never one global timeout for the job).
     private static final int MAX_TRANSLATION_LINES = 800;
     private static final int MAX_TRANSLATION_CHARS = 40000;
     private static final String DEFAULT_TRANSLATION_SYSTEM_PROMPT =
@@ -1452,6 +1471,16 @@ public final class LrclibFallback {
             if (fr) return "Traduire";
             return "Translate now";
         }
+        if ("translate_now_action".equals(key)) {
+            if (ar) return "ترجمة الآن";
+            if (fr) return "Traduire maintenant";
+            return "Translate now";
+        }
+        if ("translation_partial".equals(key)) {
+            if (ar) return "تمت ترجمة جزء من الكلمات؛ تعذّرت ترجمة بعض الأسطر";
+            if (fr) return "Traduction partielle : certaines lignes n’ont pas pu être traduites";
+            return "Partially translated; some lines could not be translated";
+        }
         if ("translation_config_required".equals(key)) {
             if (ar) return "أدخل مفتاح API والنموذج ولغة الترجمة";
             if (fr) return "Saisissez la clé API, le modèle et la langue cible";
@@ -2210,7 +2239,8 @@ public final class LrclibFallback {
     private static final Pattern LRC_META =
             Pattern.compile("^\\[(ti|ar|al|length|by|offset|re|ve):", Pattern.CASE_INSENSITIVE);
 
-    private static final class Line {
+    /** One source lyric line. Package-private so batch helpers are unit-testable. */
+    static final class Line {
         int ms;
         String text;
     }
@@ -3017,6 +3047,20 @@ public final class LrclibFallback {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // Pinned footer action, visible in BOTH config-only and manual modes.
+        // It translates the current song immediately with the saved settings
+        // (the positive button keeps its existing draft-settings behaviour).
+        final android.widget.Button translateNowButton = new android.widget.Button(ctx);
+        translateNowButton.setText(tr("translate_now_action"));
+        LinearLayout dialogView = new LinearLayout(ctx);
+        dialogView.setOrientation(LinearLayout.VERTICAL);
+        dialogView.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        LinearLayout.LayoutParams footerParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        footerParams.topMargin = dp(ctx, 2);
+        dialogView.addView(translateNowButton, footerParams);
+
         final CheckBox autoTranslateToggle;
         if (includeAutoToggle) {
             addSettingsSection(ctx, rows, tr("auto_translate_title"));
@@ -3178,7 +3222,7 @@ public final class LrclibFallback {
 
         final AlertDialog dialog = new AlertDialog.Builder(ctx)
                 .setTitle(tr("ai_title"))
-                .setView(scroll)
+                .setView(dialogView)
                 .setPositiveButton(tr(configOnly ? "save_settings" : "translate_now"), null)
                 .setNeutralButton(tr("lyrics_options"), new DialogInterface.OnClickListener() {
                     @Override
@@ -3203,6 +3247,12 @@ public final class LrclibFallback {
                 .setNegativeButton(android.R.string.cancel, null)
                 .create();
         dialog.show();
+        translateNowButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                translateNowWithSavedSettings(ctx, song, fragmentObj, dialog);
+            }
+        });
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -3286,6 +3336,57 @@ public final class LrclibFallback {
                         accountIdValue, modelValue, languageValue, systemPromptValue, true);
             }
         });
+    }
+
+    /**
+     * Dialog footer action: translate the current song immediately using the
+     * SAVED settings (provider/key/account/model/language/system prompt), via
+     * the same translateAndRender path as every other entry point. Incomplete
+     * settings leave the dialog open and show the existing validation message;
+     * a missing song gets an explicit toast instead of a silent no-op.
+     */
+    private static void translateNowWithSavedSettings(Context ctx, Object song,
+                                                      Object fragmentObj, AlertDialog dialog) {
+        try {
+            if (ctx == null) return;
+            Object activeFragment = fragmentObj != null
+                    ? fragmentObj
+                    : playerFragment == null ? null : playerFragment.get();
+            Object target = currentSongFromPlayer(activeFragment);
+            if (target == null) target = song;
+            if (target == null) {
+                synchronized (LrclibFallback.class) {
+                    target = lastSong;
+                }
+            }
+            TranslationSettings settings = readTranslationSettings(ctx);
+            String missing = missingTranslationConfig(settings.provider, settings.apiKey,
+                    settings.accountId, settings.model, settings.language);
+            if (missing != null) {
+                Toast.makeText(ctx, tr(missing), Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (target == null) {
+                Toast.makeText(ctx, tr("no_loaded"), Toast.LENGTH_SHORT).show();
+                return;
+            }
+            SourceSnapshot snapshot = translationSourceFor(target);
+            if ((snapshot == null || snapshot.lines.isEmpty())
+                    && song != null && song != target) {
+                target = song;
+                snapshot = translationSourceFor(target);
+            }
+            if (snapshot == null || snapshot.lines.isEmpty()) {
+                Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
+                return;
+            }
+            dialog.dismiss();
+            translateAndRender(ctx, target, snapshot, settings.provider, settings.apiKey,
+                    settings.accountId, settings.model, settings.language,
+                    settings.systemPrompt, true);
+        } catch (Throwable t) {
+            Log.d(TAG, "translateNowWithSavedSettings failed: " + t);
+        }
     }
 
     private static String trimOrEmpty(String value) {
@@ -3735,8 +3836,14 @@ public final class LrclibFallback {
         }
         final String cacheKey;
         try {
-            cacheKey = translationCacheKey(snapshot, provider.cacheModelKey(model),
+            String key = translationCacheKey(snapshot, provider.cacheModelKey(model),
                     language, systemPrompt);
+            // Cloudflare-only namespace: whole-song entries written by the old
+            // single-request path could be truncated/partial, so never reuse
+            // them as a complete batched result. Other providers keep their
+            // existing cache key format untouched.
+            cacheKey = provider == TranslationProvider.CLOUDFLARE
+                    ? key + "|cfbatchv2" : key;
         } catch (Exception e) {
             Toast.makeText(ctx, tr("translation_failed"), Toast.LENGTH_SHORT).show();
             if (!interactive) renderOriginalLyricsIfCurrent(song, snapshot);
@@ -3764,26 +3871,64 @@ public final class LrclibFallback {
             if (!interactive) renderOriginalLyricsIfCurrent(song, snapshot);
             return;
         }
+        final boolean batched = provider == TranslationProvider.CLOUDFLARE;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 List<String> translated = readTranslationCache(ctx, cacheKey,
                         snapshot.lines.size());
                 String failure = null;
+                int failedBatches = 0;
+                int totalBatches = 0;
+                String batchError = null;
                 if (translated == null) {
-                    try {
-                        String sessionId = provider == TranslationProvider.OPENCODE
-                                ? openCodeSessionId(ctx) : null;
-                        translated = requestTranslation(provider, apiKey, accountId, model,
-                                sessionId, language, systemPrompt, snapshot.lines);
-                        writeTranslationCache(ctx, cacheKey, translated);
-                    } catch (Throwable t) {
-                        failure = safeTranslationError(t);
-                        logTranslation(provider.displayName + " translation failed: " + t);
+                    if (batched) {
+                        // CLOUDFLARE ONLY: many small sequential requests. Each
+                        // one has its own 10s read/connect timeout (set inside
+                        // requestTranslation), no global job timeout; failures
+                        // are isolated to their batch.
+                        List<List<Line>> batches = translationBatchesFor(
+                                provider, model, snapshot.lines);
+                        final BatchTranslator translator = new BatchTranslator() {
+                            @Override
+                            public List<String> translate(List<Line> batch, String customPrompt)
+                                    throws Exception {
+                                return requestTranslation(provider, apiKey, accountId, model,
+                                        null, language, customPrompt, batch);
+                            }
+                        };
+                        BatchOutcome outcome = translateBatches(translationPrefs(ctx),
+                                provider, accountId, model, language, snapshot.synced,
+                                systemPrompt, batches, translator);
+                        translated = outcome.lines;
+                        failedBatches = outcome.failedBatches;
+                        totalBatches = outcome.totalBatches;
+                        batchError = outcome.firstError;
+                        // Cache a whole-song result only if every batch worked;
+                        // a partial result must retry its failed batches.
+                        if (outcome.failedBatches == 0) {
+                            writeTranslationCache(ctx, cacheKey, translated);
+                        }
+                    } else {
+                        // OPENROUTER / OPENCODE / XKIRO: original single request,
+                        // original prompt, original cache key — untouched.
+                        try {
+                            String sessionId = provider == TranslationProvider.OPENCODE
+                                    ? openCodeSessionId(ctx) : null;
+                            translated = requestTranslation(provider, apiKey, accountId, model,
+                                    sessionId, language, systemPrompt, snapshot.lines);
+                            writeTranslationCache(ctx, cacheKey, translated);
+                        } catch (Throwable t) {
+                            failure = safeTranslationError(t);
+                            logTranslation(provider.displayName + " translation failed: " + t);
+                        }
                     }
                 }
                 final List<String> result = translated;
                 final String error = failure;
+                final int failed = failedBatches;
+                final int total = totalBatches;
+                final String batchFailure = batchError;
                 new Handler(Looper.getMainLooper()).post(new Runnable() {
                     @Override
                     public void run() {
@@ -3816,18 +3961,31 @@ public final class LrclibFallback {
                                 }
                                 return;
                             }
-                            if (error != null || result == null) {
+                            boolean allFailed = batched
+                                    ? (total > 0 && failed == total)
+                                    : (error != null || result == null);
+                            if (allFailed) {
                                 String message = tr("translation_failed");
-                                if (error != null && !error.trim().isEmpty()) {
-                                    message += ": " + error;
+                                String detail = batched ? batchFailure : error;
+                                if (detail != null && !detail.trim().isEmpty()) {
+                                    message += ": " + detail;
                                 }
                                 Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
                                 if (!interactive) renderOriginalLyricsIfCurrent(song, current);
                                 return;
                             }
+                            // Successful batches render with the originals of
+                            // failed batches (blank = original line), so the
+                            // full line count/order is always preserved.
                             renderDualLines(song, current.callback, snapshot,
                                     preserveArabicLines(snapshot.lines, result));
-                            if (interactive) {
+                            if (batched && failed > 0) {
+                                logTranslation("partial Cloudflare translation: " + failed
+                                        + "/" + total + " batches failed for "
+                                        + snapshot.songId);
+                                Toast.makeText(ctx, tr("translation_partial"),
+                                        Toast.LENGTH_SHORT).show();
+                            } else if (interactive) {
                                 Toast.makeText(ctx, tr("translation_done"),
                                         Toast.LENGTH_SHORT).show();
                             }
@@ -3891,8 +4049,13 @@ public final class LrclibFallback {
     }
 
     private static List<String> readTranslationCache(Context ctx, String key, int count) {
+        return readTranslationCache(translationPrefs(ctx), key, count);
+    }
+
+    /** SharedPreferences overload keeps per-batch cache reuse unit-testable. */
+    static List<String> readTranslationCache(SharedPreferences p, String key, int count) {
         try {
-            String raw = translationPrefs(ctx).getString(key, null);
+            String raw = p.getString(key, null);
             if (raw == null) return null;
             JSONArray array = new JSONArray(raw);
             if (array.length() != count) return null;
@@ -3910,13 +4073,233 @@ public final class LrclibFallback {
 
     private static void writeTranslationCache(Context ctx, String key,
                                               List<String> translated) {
+        writeTranslationCache(translationPrefs(ctx), key, translated);
+    }
+
+    static void writeTranslationCache(SharedPreferences p, String key,
+                                      List<String> translated) {
         try {
             JSONArray array = new JSONArray();
             for (String line : translated) array.put(line);
-            translationPrefs(ctx).edit().putString(key, array.toString()).apply();
+            p.edit().putString(key, array.toString()).apply();
         } catch (Throwable t) {
             Log.d(TAG, "translation cache write failed: " + t);
         }
+    }
+
+    /**
+     * Validation for the one-tap "Translate now" action, which always uses the
+     * saved settings. Returns the message key describing what is missing, or
+     * null when the configuration is usable. Package-private for unit tests.
+     */
+    static String missingTranslationConfig(TranslationProvider provider, String apiKey,
+                                           String accountId, String model, String language) {
+        boolean needsAccount = provider == TranslationProvider.CLOUDFLARE;
+        if (needsAccount && trimOrEmpty(accountId).isEmpty()) return "cloudflare_config_required";
+        if (trimOrEmpty(apiKey).isEmpty() || trimOrEmpty(model).isEmpty()
+                || trimOrEmpty(language).isEmpty()) return "translation_config_required";
+        return null;
+    }
+
+    /** True when the immediate translate action can run with these saved settings. */
+    static boolean hasUsableTranslationConfig(TranslationProvider provider, String apiKey,
+                                              String accountId, String model, String language) {
+        return missingTranslationConfig(provider, apiKey, accountId, model, language) == null;
+    }
+
+    // ================= batched long-song translation =================
+
+    /** Outcome of one batched translation job, sized to the full source lyric. */
+    static final class BatchOutcome {
+        final List<String> lines;
+        final int totalBatches;
+        final int failedBatches;
+        final int cachedBatches;
+        final String firstError;
+
+        BatchOutcome(List<String> lines, int totalBatches, int failedBatches,
+                     int cachedBatches, String firstError) {
+            this.lines = lines;
+            this.totalBatches = totalBatches;
+            this.failedBatches = failedBatches;
+            this.cachedBatches = cachedBatches;
+            this.firstError = firstError;
+        }
+    }
+
+    /** One request per batch; injected so tests can supply results or failures. */
+    interface BatchTranslator {
+        List<String> translate(List<Line> batch, String customPrompt) throws Exception;
+    }
+
+    /**
+     * {maxLines, maxChars} per request. Only CLOUDFLARE uses batching in
+     * production; its Workers AI models have much smaller output caps, and a
+     * small model id (3b/8b in the name) gets an even tighter batch. The other
+     * providers translate the whole song in one request exactly as before —
+     * their entries are provided for completeness/tests only.
+     */
+    static int[] translationBatchConfig(TranslationProvider provider, String model) {
+        String id = trimOrEmpty(model).toLowerCase(Locale.ROOT);
+        boolean small = id.contains("3b") || id.contains("8b");
+        if (provider == TranslationProvider.CLOUDFLARE) {
+            return small
+                    ? new int[]{BATCH_LINES_CLOUDFLARE_SMALL, BATCH_CHARS_CLOUDFLARE_SMALL}
+                    : new int[]{BATCH_LINES_CLOUDFLARE, BATCH_CHARS_CLOUDFLARE};
+        }
+        return small
+                ? new int[]{BATCH_LINES_SMALL_MODEL, BATCH_CHARS_SMALL_MODEL}
+                : new int[]{BATCH_LINES_STANDARD, BATCH_CHARS_STANDARD};
+    }
+
+    /**
+     * The batch plan for a song. Every provider other than CLOUDFLARE gets a
+     * single batch containing all lines — its existing one-request path stays
+     * untouched. Only Cloudflare is split into small sequential requests.
+     */
+    static List<List<Line>> translationBatchesFor(TranslationProvider provider, String model,
+                                                  List<Line> lines) {
+        if (provider != TranslationProvider.CLOUDFLARE) {
+            List<List<Line>> single = new ArrayList<List<Line>>();
+            if (lines != null && !lines.isEmpty()) single.add(new ArrayList<Line>(lines));
+            return single;
+        }
+        int[] config = translationBatchConfig(provider, model);
+        return splitTranslationBatches(lines, config[0], config[1]);
+    }
+
+    /**
+     * Split source lines into sequential batches bounded by BOTH line count and
+     * character count. Empty lines and timestamps are copied verbatim, and a
+     * single oversized line still forms a (one-line) batch instead of being
+     * dropped. Order and total line count are preserved exactly.
+     */
+    static List<List<Line>> splitTranslationBatches(List<Line> lines,
+                                                    int maxLines, int maxChars) {
+        List<List<Line>> batches = new ArrayList<List<Line>>();
+        if (lines == null || lines.isEmpty()) return batches;
+        if (maxLines < 1) maxLines = 1;
+        if (maxChars < 1) maxChars = 1;
+        List<Line> current = new ArrayList<Line>();
+        int chars = 0;
+        for (Line line : lines) {
+            int len = line == null || line.text == null ? 0 : line.text.length();
+            if (!current.isEmpty()
+                    && (current.size() >= maxLines || chars + len > maxChars)) {
+                batches.add(current);
+                current = new ArrayList<Line>();
+                chars = 0;
+            }
+            current.add(line);
+            chars += len;
+        }
+        if (!current.isEmpty()) batches.add(current);
+        return batches;
+    }
+
+    /** Force a result list to exactly {@code size} entries (blank for missing). */
+    private static List<String> fitToSize(List<String> values, int size) {
+        List<String> out = new ArrayList<String>(size);
+        for (int i = 0; i < size; i++) {
+            String value = values != null && i < values.size() ? values.get(i) : null;
+            out.add(value == null ? "" : value);
+        }
+        return out;
+    }
+
+    /** Concatenate batch results in order; a null/failed batch becomes blank lines. */
+    static List<String> concatBatchResults(List<List<Line>> batches,
+                                           List<List<String>> results) {
+        List<String> out = new ArrayList<String>();
+        for (int i = 0; i < batches.size(); i++) {
+            List<String> values = results != null && i < results.size()
+                    ? results.get(i) : null;
+            out.addAll(fitToSize(values, batches.get(i).size()));
+        }
+        return out;
+    }
+
+    /**
+     * Cache key for one batch. Built only from the batch's OWN identity —
+     * provider, account id (Cloudflare), model, language, synced flag, system
+     * prompt and the batch's lines — never the whole song. That way a cached
+     * batch stays reusable when another part of the lyric changes, and a
+     * failed batch can be retried without re-requesting the successful ones.
+     */
+    static String translationBatchCacheKey(TranslationProvider provider, String accountId,
+                                           String model, String language, boolean synced,
+                                           String customPrompt, int batchIndex,
+                                           List<Line> batch) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        StringBuilder header = new StringBuilder();
+        header.append("cfbatch\n")
+                .append(provider == null ? "" : provider.cacheModelKey(model)).append('\n')
+                .append(trimOrEmpty(accountId)).append('\n')
+                .append(trimOrEmpty(model)).append('\n')
+                .append(trimOrEmpty(language)).append('\n')
+                .append(synced).append('\n')
+                .append(batchIndex).append('\n')
+                .append(translationSystemPrompt(customPrompt, batch.size())).append('\n');
+        digest.update(header.toString().getBytes("UTF-8"));
+        for (Line line : batch) {
+            digest.update(String.valueOf(line == null ? -1 : line.ms).getBytes("UTF-8"));
+            digest.update((byte) 0);
+            digest.update(String.valueOf(line == null ? "" : line.text).getBytes("UTF-8"));
+            digest.update((byte) 10);
+        }
+        StringBuilder hex = new StringBuilder("translation_b" + batchIndex + "_");
+        for (byte value : digest.digest()) {
+            hex.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        }
+        return hex.toString();
+    }
+
+    /**
+     * Translate all Cloudflare batches sequentially: check each batch's cache,
+     * issue one request on a miss, cache successes, and keep blank lines for
+     * failures so no source line is ever dropped. Each request has its own 10s
+     * timeout inside {@code requestTranslation}; there is no global job timeout
+     * and one slow/failed batch cannot abort the rest of the song.
+     */
+    static BatchOutcome translateBatches(SharedPreferences prefs, TranslationProvider provider,
+                                         String accountId, String model, String language,
+                                         boolean synced, String customPrompt,
+                                         List<List<Line>> batches, BatchTranslator translator) {
+        List<List<String>> results = new ArrayList<List<String>>();
+        int failed = 0;
+        int cached = 0;
+        String firstError = null;
+        for (int i = 0; i < batches.size(); i++) {
+            List<Line> batch = batches.get(i);
+            String key = null;
+            List<String> values = null;
+            try {
+                key = translationBatchCacheKey(provider, accountId, model, language,
+                        synced, customPrompt, i, batch);
+                values = readTranslationCache(prefs, key, batch.size());
+            } catch (Throwable t) {
+                logTranslation("batch " + i + " cache key failed: " + t);
+            }
+            if (values != null) {
+                cached++;
+                results.add(values);
+                continue;
+            }
+            try {
+                values = translator.translate(batch, customPrompt);
+                if (values == null) throw new Exception("translation returned no result");
+                values = fitToSize(values, batch.size());
+                if (key != null) writeTranslationCache(prefs, key, values);
+            } catch (Throwable t) {
+                failed++;
+                if (firstError == null) firstError = safeTranslationError(t);
+                logTranslation("translation batch " + i + " failed: " + t);
+                values = new ArrayList<String>();
+            }
+            results.add(values);
+        }
+        return new BatchOutcome(concatBatchResults(batches, results), batches.size(),
+                failed, cached, firstError);
     }
 
     private static List<String> requestTranslation(TranslationProvider provider, String apiKey,

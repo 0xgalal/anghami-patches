@@ -135,12 +135,28 @@ Translate action. The original is held while translation runs, then the
 original and translation appear together. Predominantly Arabic-script lyrics
 are skipped.
 
+The translation dialog has a pinned **Translate now** footer button in both its
+configuration and manual modes. It immediately translates the current song with
+the *saved* provider, key, model and language settings (showing the usual
+validation message if any are missing), then dismisses the dialog. The dialog's
+original positive button keeps its existing behaviour: save settings in
+configuration mode, or translate with the values currently typed in manual mode.
+
 The original lyrics remain intact. Each translation is displayed beneath its
 source line, using the source line’s timestamp for synchronized lyrics.
-The full lyric is translated together as context, and the result is checked
-for one aligned translation per source line. The model is instructed to return
-only a JSON object with a `lines` array, preserving empty lines and the exact
-source line count.
+The model is instructed to return only a JSON object with a `lines` array,
+preserving empty lines and the exact source line count.
+OpenRouter, OpenCode and xKiro still translate the whole song in a **single
+request**, exactly as before. Cloudflare Workers AI is the exception: its models
+can truncate a long single response, so lyrics are split into small sequential
+batches (10 lines / ~1200 characters by default, 6 lines / ~800 characters for
+`3b`/`8b` models). Each batch has its own 10-second timeout and cache entry keyed
+by provider, account ID, model, language, system prompt and that batch's lines —
+not the whole song — so successful batches are reused and only failed ones are
+retried. If a batch fails, its lines are left original and a short notice is
+shown; no lines are ever dropped, and line order/timestamps are preserved.
+A safety cap of 800 lines / 40,000 characters still applies to avoid abuse.
+
 The auto-translation choice, provider, API keys, models, target language, optional extra
 system prompt, and cached translations are stored in app-private preferences.
 Translations are cached by lyric, provider, model, target language, and system prompt;
