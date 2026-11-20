@@ -1,3 +1,13 @@
+## [1.15.0](https://github.com/0xgalal/anghami-patches/compare/v1.14.0...v1.15.0) (2026-11-20)
+
+### 🐛 Bug Fixes
+
+* theme patch register overflow and strip title parentheses in LRCLIB queries ([895f9d0](https://github.com/0xgalal/anghami-patches/commit/895f9d0ca06f2f3e8cff297d3bb33771c776aa1f))
+
+### ✨ New Features
+
+* hide skip-limit dialog, keep Arabic lyrics, strip LRCLIB title parentheses ([09b2edb](https://github.com/0xgalal/anghami-patches/commit/09b2edb64e4b37cbdfcad467130c03a124e61921))
+
 ## [1.14.0](https://github.com/0xgalal/anghami-patches/compare/v1.13.7...v1.14.0) (2026-11-20)
 
 ### ✨ New Features
