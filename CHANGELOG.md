@@ -1,3 +1,9 @@
+## [1.17.8](https://github.com/0xgalal/anghami-patches/compare/v1.17.7...v1.17.8) (2026-11-21)
+
+### 🐛 Bug Fixes
+
+* render picked lyrics, block server dialog, abort server shuffle/skip ([3f50f53](https://github.com/0xgalal/anghami-patches/commit/3f50f53d64f1fd8049bf47a0de0d6468150dab7d))
+
 ## [1.17.7](https://github.com/0xgalal/anghami-patches/compare/v1.17.6...v1.17.7) (2026-11-21)
 
 ### 🐛 Bug Fixes

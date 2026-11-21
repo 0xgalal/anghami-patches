@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.17.7",
+  "version": "1.17.8",
   "patches": [
     {
       "name": "AI lyrics translation · OpenRouter / OpenCode / xKiro",
@@ -40,6 +40,38 @@
       "name": "AMOLED black background",
       "description": "Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched.",
       "default": false,
+      "category": null,
+      "dependencies": [],
+      "compatiblePackages": [
+        {
+          "packageName": "com.anghami",
+          "name": "Anghami",
+          "description": null,
+          "apkFileType": "APKM",
+          "appIconColor": "#A020F0",
+          "signatures": null,
+          "targets": [
+            {
+              "version": "8.0.28",
+              "versionCodes": {
+                "ARM64_V8A": 8000280,
+                "ARMEABI_V7A": 8000280,
+                "X86": 8000280,
+                "X86_64": 8000280
+              },
+              "isExperimental": false,
+              "minSdk": null,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "options": []
+    },
+    {
+      "name": "Block server similar-songs dialog",
+      "description": "Suppresses the server-provided 'We'll play you similar songs...' dialog shown on next-song navigation. Local dialogs untouched.",
+      "default": true,
       "category": null,
       "dependencies": [],
       "compatiblePackages": [
@@ -458,7 +490,7 @@
     },
     {
       "name": "Unforce shuffle",
-      "description": "Forces server shuffleOn=false at both sync points, never reports shuffle to the server, disables the pick-a-song radio redirect, enables shuffle buttons, and disarms the shuffle upsell dialog. Manual shuffle toggle and the header Shuffle button keep working.",
+      "description": "Forces server shuffleOn=false at both sync points, never reports shuffle to the server, aborts the server-driven skip (server index can't reset the chosen song) and skip-limit similar-song fallback, disables the pick-a-song radio redirect, enables shuffle buttons, and disarms the shuffle upsell dialog. Manual shuffle toggle and the header Shuffle button keep working.",
       "default": true,
       "category": null,
       "dependencies": [],
