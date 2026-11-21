@@ -155,6 +155,127 @@ public class ProactiveLyricsFillTest {
         assertNull(state.success("other-song", "other lyrics"));
     }
 
+    // ---- new decision helpers: view state, mode fallback, retry, cleanup ----
+
+    @Test
+    public void liveViewStateOverridesStaleRenderMarks() {
+        // Stale marks after a view recreation must not suppress the fill.
+        assertTrue(LrclibFallback.isLyricsActuallyEmpty(
+                true, LrclibFallback.LyricsViewState.EMPTY));
+        // Real lyrics on screen (fresh view) must suppress it.
+        assertFalse(LrclibFallback.isLyricsActuallyEmpty(
+                true, LrclibFallback.LyricsViewState.HAS_LYRICS));
+        assertFalse(LrclibFallback.isLyricsActuallyEmpty(
+                false, LrclibFallback.LyricsViewState.HAS_LYRICS));
+        // No view available: fall back to the render marks.
+        assertTrue(LrclibFallback.isLyricsActuallyEmpty(
+                false, LrclibFallback.LyricsViewState.UNKNOWN));
+        assertFalse(LrclibFallback.isLyricsActuallyEmpty(
+                true, LrclibFallback.LyricsViewState.UNKNOWN));
+    }
+
+    @Test
+    public void lyricsModeNameFallbackRecognizesEnumConstant() {
+        assertTrue(LrclibFallback.isLyricsModeName("Lyrics"));
+        assertTrue(LrclibFallback.isLyricsModeName("lyrics"));
+        assertTrue(LrclibFallback.isLyricsModeName(" LYRICS "));
+        assertTrue(LrclibFallback.isLyricsModeName("PlayerMode.Lyrics"));
+        assertFalse(LrclibFallback.isLyricsModeName("Normal"));
+        assertFalse(LrclibFallback.isLyricsModeName("Queue"));
+        assertFalse(LrclibFallback.isLyricsModeName(null));
+    }
+
+    @Test
+    public void retryOnlyScheduledWhileViewUnavailableAndBudgetRemains() {
+        assertTrue(LrclibFallback.shouldScheduleFillRetry(
+                LrclibFallback.LyricsViewState.UNKNOWN, true, 0));
+        assertTrue(LrclibFallback.shouldScheduleFillRetry(
+                LrclibFallback.LyricsViewState.UNKNOWN, false, 1));
+        // Budget exhausted after FILL_RETRY_MAX attempts.
+        assertFalse(LrclibFallback.shouldScheduleFillRetry(
+                LrclibFallback.LyricsViewState.UNKNOWN, true, 3));
+        // A definitive view makes the retry pointless.
+        assertFalse(LrclibFallback.shouldScheduleFillRetry(
+                LrclibFallback.LyricsViewState.EMPTY, true, 0));
+        assertFalse(LrclibFallback.shouldScheduleFillRetry(
+                LrclibFallback.LyricsViewState.HAS_LYRICS, true, 0));
+    }
+
+    @Test
+    public void nativeLoadingCleanupNeededForProgressOrEmptyView() {
+        assertTrue(LrclibFallback.needsNativeLoadingCleanup(
+                true, LrclibFallback.LyricsViewState.HAS_LYRICS));
+        assertTrue(LrclibFallback.needsNativeLoadingCleanup(
+                false, LrclibFallback.LyricsViewState.EMPTY));
+        assertFalse(LrclibFallback.needsNativeLoadingCleanup(
+                false, LrclibFallback.LyricsViewState.HAS_LYRICS));
+    }
+
+    @Test
+    public void settleDelaysIncludeLongerReasserts() {
+        int[] delays = LrclibFallback.settleRenderDelaysMs();
+        assertEquals(3, delays.length);
+        for (int i = 1; i < delays.length; i++) {
+            assertTrue("delays must be strictly increasing",
+                    delays[i] > delays[i - 1]);
+        }
+        boolean has500 = false;
+        boolean has1000 = false;
+        for (int delay : delays) {
+            if (delay == 500) has500 = true;
+            if (delay == 1000) has1000 = true;
+        }
+        assertTrue("500ms re-assert required", has500);
+        assertTrue("1000ms re-assert required", has1000);
+    }
+
+    @Test
+    public void loadingCleanupRunsBeforeRenderAndSettle() {
+        final StringBuilder order = new StringBuilder();
+        LrclibFallback.renderFillResult(true,
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        order.append("clear,");
+                    }
+                },
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        order.append("render,");
+                    }
+                },
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        order.append("settle,");
+                    }
+                });
+        assertEquals("clear,render,settle,", order.toString());
+
+        order.setLength(0);
+        LrclibFallback.renderFillResult(false,
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        order.append("clear,");
+                    }
+                },
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        order.append("render,");
+                    }
+                },
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        order.append("settle,");
+                    }
+                });
+        assertEquals("render,settle,", order.toString());
+    }
+
     // ---- helpers ----
 
     private void putPositive(String synced, String plain) throws Exception {

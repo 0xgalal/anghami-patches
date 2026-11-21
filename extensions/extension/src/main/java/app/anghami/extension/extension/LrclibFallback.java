@@ -209,6 +209,22 @@ public final class LrclibFallback {
     private static String lastRenderedSongKey = "";
     private static boolean lastRenderedRealLyrics;
 
+    // Bounded retry for the case where onResume/mode-observer fires before the
+    // player's lyrics view is laid out. Keyed by song so a quick song switch
+    // cannot leave a stale retry queued for the wrong track.
+    private static final Map<String, Long> fillRetryTimes =
+            new java.util.HashMap<String, Long>();
+    private static final long FILL_RETRY_DELAY_MS = 250;
+    private static final int FILL_RETRY_MAX = 3;
+
+    /**
+     * State of the live lyrics view, used as the source of truth for
+     * "is anything actually on screen". UNKNOWN means the view is not
+     * available yet (rotation, pre-layout onResume) — callers then fall back
+     * to the in-memory render marks and schedule a bounded retry.
+     */
+    enum LyricsViewState { UNKNOWN, EMPTY, HAS_LYRICS }
+
     // ================= entry points =================
 
     /** Called after {@code A7/E.b} renders the server teaser (or empty). */
@@ -436,39 +452,136 @@ public final class LrclibFallback {
         return currentPlayingSong();
     }
 
+    /**
+     * True when an enum/state constant name denotes the Lyrics tab. Pure so it
+     * is unit-testable without an Android runtime. 8.0.28 uses the constant
+     * named "Lyrics"; keeping this name-based makes the detection survive a
+     * field rename in a rotated build.
+     */
+    static boolean isLyricsModeName(String name) {
+        if (name == null) return false;
+        String n = name.trim().toLowerCase(Locale.ROOT);
+        return "lyrics".equals(n) || "lyric".equals(n)
+                || n.endsWith("lyrics") || n.contains("lyricsmode");
+    }
+
     /** The native Lyrics mode enum value, or null when reflection cannot read it. */
     private static Object lyricsModeValue() {
-        try {
-            Class<?> modeClass =
-                    Class.forName("com.anghami.player.ui.PlayerFragmentViewModel$c");
-            return modeClass.getField("b").get(null);
-        } catch (Throwable t) {
-            return null;
+        // 8.0.28: com.anghami.player.ui.PlayerFragmentViewModel$c.b == "Lyrics".
+        // Try several class/field names, then the enum constant name, so a
+        // renamed enum cannot silently disable the proactive fill.
+        String[] classNames = {
+                "com.anghami.player.ui.PlayerFragmentViewModel$c",
+                "com.anghami.player.ui.PlayerFragmentViewModel$LyricsMode",
+        };
+        String[] fieldNames = {"b", "LYRICS", "Lyrics"};
+        for (String cn : classNames) {
+            try {
+                Class<?> modeClass = Class.forName(cn);
+                for (String fn : fieldNames) {
+                    try {
+                        Object v = modeClass.getField(fn).get(null);
+                        if (v != null) return v;
+                    } catch (Throwable ignored) {
+                    }
+                }
+                Object[] constants = modeClass.getEnumConstants();
+                if (constants != null) {
+                    for (Object c : constants) {
+                        if (c instanceof Enum
+                                && isLyricsModeName(((Enum<?>) c).name())) {
+                            return c;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
         }
+        return null;
     }
 
     private static boolean isLyricsModeValue(Object modeObj) {
+        if (modeObj == null) return false;
         Object lyricsMode = lyricsModeValue();
-        return modeObj != null && lyricsMode != null && modeObj == lyricsMode;
+        if (modeObj == lyricsMode) return true;
+        // Fallback A: 8.0.28 enum exposes b(): boolean ("this == Lyrics").
+        try {
+            Method m = findMethodUp(modeObj.getClass(), "b");
+            if (m == null) m = findMethodUp(modeObj.getClass(), "isLyrics");
+            if (m != null && m.getParameterTypes().length == 0) {
+                Object r = m.invoke(modeObj);
+                if (r instanceof Boolean && (Boolean) r) return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        // Fallback B: the constant's own name/toString.
+        try {
+            if (modeObj instanceof Enum && isLyricsModeName(((Enum<?>) modeObj).name())) {
+                return true;
+            }
+            if (isLyricsModeName(String.valueOf(modeObj))) return true;
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     /**
      * Current player mode state: TRUE = Lyrics, FALSE = another mode, null =
-     * undetectable. Shared by the mode guard below and the proactive fill so
-     * both read the same `_playerMode` / `d()` / enum `b` fields.
+     * undetectable. Shared by the mode guard and the proactive fill. The
+     * ViewModel LiveData is the primary source (n1 -> _playerMode -> d()),
+     * with the fragment's own `p1` field as a fallback (both verified present
+     * in the 8.0.28 PlayerFragment smali).
      */
     private static Boolean lyricsModeState(Object fragmentObj) {
         try {
             if (fragmentObj == null) return null;
-            Object viewModel = getFieldUp(fragmentObj, "n1");
-            if (viewModel == null) return null;
-            Object modeState = getFieldUp(viewModel, "_playerMode");
-            if (modeState == null) return null;
-            Object currentMode = modeState.getClass().getMethod("d").invoke(modeState);
-            return isLyricsModeValue(currentMode);
+            Object viewModel = firstNonNullField(fragmentObj, "n1", "viewModel");
+            if (viewModel != null) {
+                Object modeState = firstNonNullField(viewModel, "_playerMode", "playerMode");
+                if (modeState != null) {
+                    Object currentMode = invokeNoArgMethod(modeState, "d", "getValue");
+                    if (currentMode != null) {
+                        return isLyricsModeValue(currentMode) ? Boolean.TRUE : Boolean.FALSE;
+                    }
+                }
+            }
+            Object direct = firstNonNullField(fragmentObj, "p1", "playerMode");
+            if (direct != null) {
+                return isLyricsModeValue(direct) ? Boolean.TRUE : Boolean.FALSE;
+            }
+            return null;
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** Returns the first non-null field among the given names, or null. */
+    private static Object firstNonNullField(Object o, String... names) {
+        if (o == null) return null;
+        for (String name : names) {
+            try {
+                Object v = getFieldUp(o, name);
+                if (v != null) return v;
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** Invokes the first no-arg method among the given names that returns a value. */
+    private static Object invokeNoArgMethod(Object o, String... names) {
+        if (o == null) return null;
+        for (String name : names) {
+            try {
+                Method m = findMethodUp(o.getClass(), name);
+                if (m != null && m.getParameterTypes().length == 0) {
+                    Object v = m.invoke(o);
+                    if (v != null) return v;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     /** True only when the player is actually showing the Lyrics tab. */
@@ -502,7 +615,7 @@ public final class LrclibFallback {
      */
     public static void fillLyricsIfLyricsModeActive(Object fragmentObj) {
         if (!isLyricsModeActive(fragmentObj)) return;
-        runLyricsFill(fragmentObj);
+        runLyricsFill(fragmentObj, 0);
     }
 
     /**
@@ -512,10 +625,225 @@ public final class LrclibFallback {
      */
     public static void fillLyricsForMode(Object fragmentObj, Object modeObj) {
         if (!isLyricsModeValue(modeObj)) return;
-        runLyricsFill(fragmentObj);
+        runLyricsFill(fragmentObj, 0);
     }
 
-    private static void runLyricsFill(Object fragmentObj) {
+    // ------------------------------------------------------------------
+    // Pure decision helpers (unit-testable without Android / a live view)
+    // ------------------------------------------------------------------
+
+    /**
+     * Decides emptiness from the live view state and the in-memory marks.
+     * The view wins when available: static render marks survive view
+     * recreation, so a fresh empty view must still be filled even when a
+     * previous song (or a previous instance of this one) "rendered" lyrics.
+     * Without a view, fall back to the marks.
+     */
+    static boolean isLyricsActuallyEmpty(boolean marksSayRendered,
+                                         LyricsViewState viewState) {
+        if (viewState == LyricsViewState.HAS_LYRICS) return false;
+        if (viewState == LyricsViewState.EMPTY) return true;
+        return !marksSayRendered;
+    }
+
+    /** True when a bounded delayed retry is warranted (pre-layout view). */
+    static boolean shouldScheduleFillRetry(LyricsViewState viewState,
+                                           boolean contextAvailable, int attempt) {
+        return attempt < FILL_RETRY_MAX
+                && (!contextAvailable || viewState == LyricsViewState.UNKNOWN);
+    }
+
+    /**
+     * A progress state or an empty/loading view needs the native loading state
+     * explicitly cleared before our content is painted. Real lyrics already on
+     * screen do not.
+     */
+    static boolean needsNativeLoadingCleanup(boolean searchInProgress,
+                                             LyricsViewState viewState) {
+        return searchInProgress || viewState == LyricsViewState.EMPTY;
+    }
+
+    /** Delays (ms) used to re-assert our render over the native spinner. */
+    static int[] settleRenderDelaysMs() {
+        return new int[]{300, 500, 1000};
+    }
+
+    /**
+     * Runs the three fill-render steps in the order that clears the native
+     * spinner: loading cleanup first, our content render second, and the
+     * delayed re-assert last. Kept pure (Runnables only) so tests can verify
+     * ordering without an Android runtime.
+     */
+    static void renderFillResult(boolean clearLoading, Runnable clear,
+                                 Runnable render, Runnable settle) {
+        if (clearLoading && clear != null) clear.run();
+        if (render != null) render.run();
+        if (settle != null) settle.run();
+    }
+
+    // ------------------------------------------------------------------
+    // Live-view inspection (reflection only, guarded)
+    // ------------------------------------------------------------------
+
+    /** Root view of a Fragment, via getView() or the native `e` field. */
+    private static View fragmentRootView(Object fragmentObj) {
+        try {
+            Method gv = findMethodUp(fragmentObj.getClass(), "getView");
+            Object v = gv == null ? null : gv.invoke(fragmentObj);
+            if (v instanceof View) return (View) v;
+        } catch (Throwable ignored) {
+        }
+        try {
+            Object v = getFieldUp(fragmentObj, "e");
+            if (v instanceof View) return (View) v;
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** Reads the value of a LiveData-like object via d()/getValue(). */
+    private static Object liveDataValue(Object liveData) {
+        return invokeNoArgMethod(liveData, "d", "getValue");
+    }
+
+    /**
+     * State of a known lyrics render callback (com.anghami.ui.view.A): its
+     * `B` LiveData holds a sealed state; `com.anghami.ui.view.t` is the
+     * success/lyrics-present state, everything else is empty/loading/error.
+     */
+    private static LyricsViewState lyricsViewStateForCallback(Object callback) {
+        try {
+            if (callback == null) return LyricsViewState.UNKNOWN;
+            Object state = liveDataValue(getFieldUp(callback, "B"));
+            if (state == null) return LyricsViewState.UNKNOWN;
+            String cn = state.getClass().getName();
+            if ("com.anghami.ui.view.t".equals(cn)) {
+                // t is the success state; its `a` field holds the rendered
+                // lines. A success state with no lines is still effectively
+                // empty (e.g. our own loading-clear call).
+                Object lines = getFieldOrNull(state, "a");
+                if (lines instanceof List && !((List<?>) lines).isEmpty()) {
+                    return LyricsViewState.HAS_LYRICS;
+                }
+                return LyricsViewState.EMPTY;
+            }
+            return LyricsViewState.EMPTY;
+        } catch (Throwable t) {
+            return LyricsViewState.UNKNOWN;
+        }
+    }
+
+    /** Finds the lyrics view (A) in a hierarchy by class name / state field. */
+    private static Object findLyricsView(View root) {
+        if (root == null) return null;
+        String cn = root.getClass().getName();
+        if ("com.anghami.ui.view.A".equals(cn)) return root;
+        if (cn.startsWith("com.anghami.ui.view.")
+                && getFieldOrNull(root, "B") != null
+                && getFieldOrNull(root, "i") != null) {
+            return root;
+        }
+        if (root instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) root;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                Object found = findLyricsView(g.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static Object getFieldOrNull(Object o, String name) {
+        try {
+            return getFieldUp(o, name);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Finds rv_lyrics / lyrics_container by resource name (ID-safe). */
+    private static View findLyricsList(View root) {
+        if (root == null) return null;
+        try {
+            int id = root.getResources().getIdentifier("rv_lyrics", "id",
+                    root.getContext().getPackageName());
+            if (id != 0) {
+                View v = root.findViewById(id);
+                if (v != null) return v;
+            }
+            id = root.getResources().getIdentifier("lyrics_container", "id",
+                    root.getContext().getPackageName());
+            if (id != 0) {
+                View v = root.findViewById(id);
+                if (v != null) return v;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** Counts real lyric lines from the RecyclerView adapter or child count. */
+    private static int countLyricLines(View list) {
+        if (!(list instanceof ViewGroup)) return 0;
+        try {
+            Method ga = findMethodUp(list.getClass(), "getAdapter");
+            Object adapter = ga == null ? null : ga.invoke(list);
+            if (adapter != null) {
+                Method gi = findMethodUp(adapter.getClass(), "getItemCount");
+                Object count = gi == null ? null : gi.invoke(adapter);
+                if (count instanceof Integer) return (Integer) count;
+            }
+        } catch (Throwable ignored) {
+        }
+        return ((ViewGroup) list).getChildCount();
+    }
+
+    /** Best-effort state of the live lyrics view for the proactive fill. */
+    private static LyricsViewState lyricsViewState(Object fragmentObj) {
+        try {
+            View root = fragmentRootView(fragmentObj);
+            if (root == null) return LyricsViewState.UNKNOWN;
+            Object lyricsView = findLyricsView(root);
+            if (lyricsView != null) {
+                LyricsViewState state = lyricsViewStateForCallback(lyricsView);
+                if (state != LyricsViewState.UNKNOWN) return state;
+            }
+            View list = findLyricsList(root);
+            if (list == null) return LyricsViewState.UNKNOWN;
+            return countLyricLines(list) > 0
+                    ? LyricsViewState.HAS_LYRICS : LyricsViewState.EMPTY;
+        } catch (Throwable t) {
+            return LyricsViewState.UNKNOWN;
+        }
+    }
+
+    /** Bounded main-thread retry when the mode is active but the view is not ready. */
+    private static void scheduleFillRetry(final Object fragmentObj,
+                                          final String queueKey, final int attempt) {
+        if (!shouldScheduleFillRetry(
+                lyricsViewState(fragmentObj), true, attempt)) return;
+        synchronized (LrclibFallback.class) {
+            Long last = fillRetryTimes.get(queueKey);
+            long now = System.currentTimeMillis();
+            if (last != null && now - last < FILL_RETRY_DELAY_MS) return;
+            fillRetryTimes.put(queueKey, now);
+        }
+        try {
+            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (!isLyricsModeActive(fragmentObj)) return;
+                        runLyricsFill(fragmentObj, attempt + 1);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, FILL_RETRY_DELAY_MS);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void runLyricsFill(Object fragmentObj, int attempt) {
         try {
             if (fragmentObj == null) return;
             Object songObj = currentSongFromPlayer(fragmentObj);
@@ -530,14 +858,26 @@ public final class LrclibFallback {
                 Object target = getFieldUp(fragmentObj, "V");
                 if (target instanceof View) ctx = ((View) target).getContext();
             }
-            if (ctx == null) return;
+            String queueKey = songKey(song);
+            if (ctx == null) {
+                scheduleFillRetry(fragmentObj, queueKey, attempt);
+                return;
+            }
             // Refresh the song-bound callback so a view recreated since the
             // last render wins over a stale one. evaluate/render always resolve
             // callbackForSong again at paint time.
             if (callback != null) rememberLyricsTarget(songObj, callback);
 
-            String queueKey = songKey(song);
-            FillDecision decision = decideFill(true, hasRenderedLyricsFor(songObj),
+            LyricsViewState viewState = lyricsViewState(fragmentObj);
+            if (shouldScheduleFillRetry(viewState, true, attempt)
+                    && viewState == LyricsViewState.UNKNOWN) {
+                scheduleFillRetry(fragmentObj, queueKey, attempt);
+                // Still proceed on the marks so the fill is not lost when the
+                // view simply cannot be inspected on this device.
+            }
+            boolean actuallyEmpty = isLyricsActuallyEmpty(
+                    hasRenderedLyricsFor(songObj), viewState);
+            FillDecision decision = decideFill(true, !actuallyEmpty,
                     isFillInFlight(queueKey), prefs(ctx), song,
                     System.currentTimeMillis());
             if (decision.action == FillAction.NONE) return;
@@ -710,44 +1050,127 @@ public final class LrclibFallback {
                 @Override
                 public void render(Context ctx, Object songObj, Object callback,
                                    String plain, String synced, String queryUsed) {
-                    renderOnMain(ctx, songObj, callback, plain, synced, queryUsed, false);
-                    // The native lyrics load can post its spinner state right
-                    // after our render frame. Re-assert the same lyrics once
-                    // the queued native frames have run so the view never
-                    // settles on a loading icon. Guarded to the same song/callback.
-                    settleRenderOnMain(songObj, callback, plain, synced);
+                    // Clear any native loading state on the freshest callback
+                    // first, then paint our content. The native lyrics load can
+                    // post its spinner state right after our render frame, so
+                    // settleRenderOnMain re-asserts the same lyrics afterwards.
+                    renderFillResult(true,
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    clearNativeLoading(songObj, callback);
+                                }
+                            },
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    renderOnMain(ctx, songObj, callback, plain, synced, queryUsed, false);
+                                }
+                            },
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    settleRenderOnMain(songObj, callback, plain, synced);
+                                }
+                            });
                 }
             };
 
+    /**
+     * Safe reflective call to the freshest lyrics callback's success method
+     * ({@code A7/E$a.V}). Calling V() drives the native view's state LiveData
+     * to its success state, which is what actually removes the loading
+     * spinner. Guarded so a mismatched/changed callback can never crash the
+     * host app.
+     */
+    private static void clearNativeLoading(final Object songObj, final Object callback) {
+        Runnable clear = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Object latest = callbackForSong(songObj);
+                    if (latest == null) latest = callback;
+                    if (latest == null) return;
+                    Object response = buildResponse(songObj, "", null);
+                    if (response == null) return;
+                    invokeRender(latest, songObj, new ArrayList<Object>(), response);
+                } catch (Throwable t) {
+                    Log.d(TAG, "clearNativeLoading failed: " + t);
+                }
+            }
+        };
+        try {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                clear.run();
+            } else {
+                new Handler(Looper.getMainLooper()).post(clear);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Same key renderOnMain uses for dedupe; shared with the settle guards. */
+    private static String renderKey(Object songObj, String plain, String synced) {
+        try {
+            Object id = getFieldUp(songObj, "id");
+            return String.valueOf(id) + "|" + (plain == null ? 0 : plain.hashCode())
+                    + "|" + (synced == null ? 0 : synced.hashCode())
+                    + "|" + lastPreferSynced;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** True while our render is still the newest one for this callback. */
+    private static boolean isLatestRender(Object callback, String key) {
+        if (callback == null || key == null) return false;
+        try {
+            synchronized (LrclibFallback.class) {
+                return key.equals(renderedKeys.get(callback));
+            }
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static void settleRenderOnMain(final Object songObj, final Object callback,
                                            final String plain, final String synced) {
-        try {
-            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        Object latest = callbackForSong(songObj);
-                        if (latest == null) latest = callback;
-                        if (latest == null) return;
-                        if (latest instanceof View && songObj != null) {
-                            Object viewSong = getFieldUp(latest, "c");
-                            Object viewId = viewSong == null ? null : getFieldUp(viewSong, "id");
-                            Object songId = getFieldUp(songObj, "id");
-                            if (viewId != null && songId != null
-                                    && !String.valueOf(viewId).equals(String.valueOf(songId))) {
-                                return;
+        final String key = renderKey(songObj, plain, synced);
+        for (final int delay : settleRenderDelaysMs()) {
+            try {
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            Object latest = callbackForSong(songObj);
+                            if (latest == null) latest = callback;
+                            if (latest == null) return;
+                            if (latest instanceof View && songObj != null) {
+                                Object viewSong = getFieldUp(latest, "c");
+                                Object viewId = viewSong == null ? null : getFieldUp(viewSong, "id");
+                                Object songId = getFieldUp(songObj, "id");
+                                if (viewId != null && songId != null
+                                        && !String.valueOf(viewId).equals(String.valueOf(songId))) {
+                                    return;
+                                }
                             }
+                            // Never overwrite a newer render (e.g. a finished
+                            // translation) with our older text.
+                            if (!isLatestRender(latest, key)) return;
+                            // If real lyrics are already showing, stop.
+                            if (lyricsViewStateForCallback(latest)
+                                    == LyricsViewState.HAS_LYRICS) return;
+                            Object response = buildResponse(songObj, plain, synced);
+                            if (response == null) return;
+                            invokeRender(latest, songObj,
+                                    buildLines(response, plain, synced), response);
+                        } catch (Throwable t) {
+                            Log.d(TAG, "settle render failed: " + t);
                         }
-                        Object response = buildResponse(songObj, plain, synced);
-                        if (response == null) return;
-                        invokeRender(latest, songObj,
-                                buildLines(response, plain, synced), response);
-                    } catch (Throwable t) {
-                        Log.d(TAG, "settle render failed: " + t);
                     }
-                }
-            }, 300);
-        } catch (Throwable ignored) {
+                }, delay);
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -831,8 +1254,12 @@ public final class LrclibFallback {
         final Context appCtx = ctx.getApplicationContext() != null
                 ? ctx.getApplicationContext() : ctx;
         final SearchRenderState status = new SearchRenderState();
-        // Paint a real status line over the native spinner before any network
-        // work starts; the state machine guarantees a final line replaces it.
+        // Clear the native loading state on the freshest callback first, then
+        // paint a real status line over the spinner before any network work.
+        // The state machine guarantees a final line replaces the status.
+        if (needsNativeLoadingCleanup(true, lyricsViewStateForCallback(callback))) {
+            clearNativeLoading(songObj, callback);
+        }
         renderSearchStatus(songObj, callback, status.begin(queueKey));
         new Thread(new Runnable() {
             @Override
@@ -1809,6 +2236,18 @@ public final class LrclibFallback {
         return null;
     }
 
+    private static Method findMethodUp(Class<?> c, String name) {
+        for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+            try {
+                Method m = k.getDeclaredMethod(name);
+                m.setAccessible(true);
+                return m;
+            } catch (NoSuchMethodException ignored) {
+            }
+        }
+        return null;
+    }
+
     private static Object getFieldUp(Object o, String name) throws Exception {
         Field f = fieldUp(o.getClass(), name);
         return f == null ? null : f.get(o);
@@ -2514,6 +2953,7 @@ public final class LrclibFallback {
         synchronized (LrclibFallback.class) {
             fillInFlight.clear();
             missRetryTimes.clear();
+            fillRetryTimes.clear();
             nativeFullRenderTimes.clear();
             lastRenderedSongKey = "";
             lastRenderedRealLyrics = false;
@@ -3240,15 +3680,8 @@ public final class LrclibFallback {
 
         // Idempotence: repeated API callbacks for the same song must not
         // re-render (and scroll-jump) an already-shown identical result.
-        final String key;
-        try {
-            Object id = getFieldUp(songObj, "id");
-            key = String.valueOf(id) + "|" + (plain == null ? 0 : plain.hashCode())
-                    + "|" + (synced == null ? 0 : synced.hashCode())
-                    + "|" + lastPreferSynced;
-        } catch (Exception e) {
-            return;
-        }
+        final String key = renderKey(songObj, plain, synced);
+        if (key == null) return;
         synchronized (LrclibFallback.class) {
             if (key.equals(renderedKeys.get(renderCallback))) {
                 Log.d(TAG, "duplicate render skipped (" + queryUsed + ")");
