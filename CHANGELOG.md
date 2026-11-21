@@ -1,3 +1,9 @@
+## [1.17.5](https://github.com/0xgalal/anghami-patches/compare/v1.17.4...v1.17.5) (2026-11-21)
+
+### 🐛 Bug Fixes
+
+* Translate now uses rendered lyrics; tolerate empty Cloudflare responses ([f9a8796](https://github.com/0xgalal/anghami-patches/commit/f9a879618181a747be43b61ace61656022d579d5))
+
 ## [1.17.4](https://github.com/0xgalal/anghami-patches/compare/v1.17.3...v1.17.4) (2026-11-21)
 
 ### 🐛 Bug Fixes
