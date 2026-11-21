@@ -1,6 +1,7 @@
 package app.anghami.patches.plus
 
 import app.morphe.patcher.Fingerprint
+import app.morphe.patcher.fieldAccess
 import app.morphe.patcher.methodCall
 import app.morphe.patcher.opcode
 import app.morphe.patcher.string
@@ -251,6 +252,54 @@ object RadioShuffleMessageFingerprint : Fingerprint(
     parameters = listOf(),
     filters = listOf(
         string("shuffle"),
+    )
+)
+
+/**
+ * Queue-copy fill (Anghami 8.0.28, verified in 8.0.28: PlayQueue
+ * `commonFillPlayQueue(PlayQueue)V`, private, smali:2668). Called by
+ * `getCopy`/`getPerfectCopy` when the player rebuilds a queue. It copies
+ * `isShuffleMode` from the source queue to the new one (smali:2698 iget under
+ * `:cond_0`, smali:2702 label-free iput). A server-forced shuffle value that
+ * got stuck in a queue would otherwise re-apply on the rebuilt queue and jump
+ * to a random next song. No string filter in the method; class + name +
+ * signature + the shuffle-mode field access pin it.
+ */
+object CommonFillPlayQueueFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/odin/playqueue/PlayQueue;",
+    name = "commonFillPlayQueue",
+    // No accessFlags (private in 8.0.28; exact-int matching brittle).
+    returnType = "V",
+    parameters = listOf("Lcom/anghami/odin/playqueue/PlayQueue;"),
+    filters = listOf(
+        fieldAccess(
+            smali = "Lcom/anghami/odin/playqueue/PlayQueue;->isShuffleMode:Z"
+        ),
+    )
+)
+
+/**
+ * Server-reporting skip-limit gate (Anghami 8.0.28, verified in 8.0.28:
+ * PlayQueueManager `skipLimitReached()Z`, public static, smali:6052).
+ *
+ * Fed into `SongParams.setSkiplimitReached()` (`skiplimitreached` query param)
+ * by `q6/a`, `q6/b` and `SongPlayqueue` when the client builds the request for
+ * a song the user picked. With that flag set, the server swaps the requested
+ * song for a "similar" one instead — the user sees the chosen song skipped.
+ * Forcing this helper false keeps `skiplimitreached` off the wire so the
+ * server always serves the explicitly chosen song.
+ */
+object ManagerSkipLimitReachedFingerprint : Fingerprint(
+    definingClass = "Lcom/anghami/odin/playqueue/PlayQueueManager;",
+    name = "skipLimitReached",
+    accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.STATIC),
+    returnType = "Z",
+    parameters = listOf(),
+    filters = listOf(
+        methodCall(
+            definingClass = "Lcom/anghami/odin/playqueue/PlayQueue;",
+            name = "skipLimitReached",
+        ),
     )
 )
 

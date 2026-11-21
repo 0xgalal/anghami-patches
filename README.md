@@ -36,6 +36,7 @@ All patches are enabled by default (`default=true`) — disable any you don't ne
 |----------|----------------|-----------|
 | [AI lyrics translation · OpenRouter / OpenCode / xKiro](#ai-lyrics-translation-openrouter-opencode-xkiro) | Adds optional automatic lyric translation via OpenRouter, OpenCode, or xKiro. Automatic mode shows original and translated lyrics together after translation completes. Long-press Lyrics to configure. |  |
 | [AMOLED black background](#amoled-black-background) | Forces pure-black app background in dark mode (window_background_color -> #000000). Surfaces/cards keep stock greys; light mode untouched. |  |
+| [Block server similar-songs dialog](#block-server-similar-songs-dialog) | Suppresses the server-provided "We'll play you similar songs. This helps us keep music free for you" dialog on next-song navigation by aborting the config-driven dialog funnel (x.m); local dialogs (login, rating) are untouched. |  |
 | [Disable audio ads](#disable-audio-ads) | Forces AdSettings.noAd=true and PlayQueue.getDisableAds=true so songs are treated as ad-free locally. Client flag only. |  |
 | [Header Play + Shuffle](#header-play-shuffle) | Playlist/album headers show Play + Shuffle instead of Shuffle + Edit/Follow/Like (functional LEAVECOLLAB, local-songs ADD_MORE and podcasts untouched). Pulls in 'Unforce shuffle'. |  |
 | [Hide Gold features](#hide-gold-features) | Forces Account.isGold/isGoldUser and all GoldUtilsKt.isGold overloads to false. Hides server-gated Gold UI instead of spoofing it. |  |
@@ -110,6 +111,15 @@ in-memory render marks — a recreated view with stale marks is still filled. If
 the mode observer fires before the player view is laid out, a bounded main-thread
 retry (up to 3 attempts, 250 ms apart) re-checks it. All cache, cooldown,
 in-flight and dedupe guards remain in force.
+
+When you skip to another song, a lyrics view left over from the previous track
+is no longer mistaken for lyrics that are actually on screen: the view is only
+trusted when it is bound to the current song, so the new song gets filled instead
+of being left empty. A manual pick always wins — it is force-rendered past the
+dedupe check (even if the same text was shown earlier), re-resolves the live
+callback at paint time in case the view was recreated, and invalidates any
+queued autofill result or delayed re-assert so nothing paints stale or empty
+lyrics over your selection.
 
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 
