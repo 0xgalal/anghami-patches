@@ -94,11 +94,22 @@ so revisiting a lyrics-less song never hammers the providers.
 
 A search starts by replacing the native loading spinner with an immediate
 status line, and always finishes with either the lyrics or a clear
-"no results" message, so the spinner cannot be left behind. Manual search in
-the Lyrics options dialog (**Search lyrics**) also covers every selected source
-in the saved order, shows which source each candidate came from, and skips
-sources that fail. Picking a candidate still caches it, seeds translation state
-and renders it through the standard path.
+"no results" message, so the spinner cannot be left behind. The native loading
+state is also cleared explicitly by calling the lyrics view's success callback,
+and the result is re-asserted at 300 ms, 500 ms and 1000 ms in case the native
+load posts its spinner state a frame later. Manual search in the Lyrics options
+dialog (**Search lyrics**) also covers every selected source in the saved order,
+shows which source each candidate came from, and skips sources that fail.
+Picking a candidate still caches it, seeds translation state and renders it
+through the standard path.
+
+The two proactive-fill hooks are injected by the **LRCLIB lyrics fallback** patch
+itself, so they work whether or not AI translation is enabled. Emptiness is
+decided from the live lyrics view first (its state/recycler), not only from the
+in-memory render marks — a recreated view with stale marks is still filled. If
+the mode observer fires before the player view is laid out, a bounded main-thread
+retry (up to 3 attempts, 250 ms apart) re-checks it. All cache, cooldown,
+in-flight and dedupe guards remain in force.
 
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 

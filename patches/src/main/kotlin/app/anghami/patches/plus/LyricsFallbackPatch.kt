@@ -126,14 +126,32 @@ val lyricsFallbackPatch = bytecodePatch(
                 invoke-static {p1}, $FALLBACK_HELPER->forceSongFlags(Ljava/lang/Object;)V
             """
         )
+        // Proactive fill on the main player screen. This hook MUST live in
+        // lyricsFallbackPatch (the always-on entry point), not in the AI
+        // translation patch: a user who enables LRCLIB fallback but not
+        // OpenRouter translation otherwise never gets the fill injected.
+        // Single static call at method entry (label-safe, p0 only).
+        PlayerLyricsButtonResumeFingerprint.method.addInstructions(
+            0,
+            """
+                invoke-static {p0}, $FALLBACK_HELPER->fillLyricsIfLyricsModeActive(Ljava/lang/Object;)V
+            """
+        )
         // Mode observer: it reads the current song via I0() and reverts
         // lyrics mode when !hasLyrics. Force the flags on the gate's song
         // instance right after its I0() move-result. a1 calls I0() twice,
         // so the insert anchors on the object register of the single
         // Song.hasLyrics iget (not on call order). Podcast guard untouched;
-        // no nops.
+        // no nops. The same entry point also drives the proactive fill when
+        // the user taps Lyrics (p1 is the new mode, checked by the helper).
         run {
             val a1 = LyricsModeRevertFingerprint.method
+            a1.addInstructions(
+                0,
+                """
+                    invoke-static {p0, p1}, $FALLBACK_HELPER->fillLyricsForMode(Ljava/lang/Object;Ljava/lang/Object;)V
+                """
+            )
             val a1ins = a1.implementation!!.instructions
             val objRegs = a1ins.mapNotNull { ins ->
                 if (ins.opcode == Opcode.IGET_BOOLEAN && ins is Instruction22c &&
@@ -278,24 +296,15 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
         )
 
         // The Lyrics button uses a native View click listener. Add a
-        // separate long-click listener without changing its ordinary click,
-        // plus a proactive fill when Lyrics mode is active but empty.
-        // Single static calls at method entry (label-safe).
+        // separate long-click listener without changing its ordinary click.
+        // Only the translation-specific UI lives here; the proactive fill
+        // hooks now live in lyricsFallbackPatch.execute so they run even when
+        // AI translation is not part of the user's patch set.
+        // Single static call at method entry (label-safe, p0 only).
         PlayerLyricsButtonResumeFingerprint.method.addInstructions(
             0,
             """
                 invoke-static {p0}, $FALLBACK_HELPER->installLyricsButtonLongPress(Ljava/lang/Object;)V
-                invoke-static {p0}, $FALLBACK_HELPER->fillLyricsIfLyricsModeActive(Ljava/lang/Object;)V
-            """
-        )
-
-        // Covers tapping Lyrics after onResume: the mode-change callback
-        // receives the new mode in p1. Branch-free entry insert using only
-        // incoming parameters.
-        LyricsModeRevertFingerprint.method.addInstructions(
-            0,
-            """
-                invoke-static {p0, p1}, $FALLBACK_HELPER->fillLyricsForMode(Ljava/lang/Object;Ljava/lang/Object;)V
             """
         )
     }
