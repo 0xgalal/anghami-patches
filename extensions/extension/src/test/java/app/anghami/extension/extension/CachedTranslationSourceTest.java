@@ -194,7 +194,77 @@ public class CachedTranslationSourceTest {
         assertEquals(0, LrclibFallback.waterfallCountForTest());
     }
 
+    @Test
+    public void translateNowUsesCachedLyricsDespiteStaleLiveSource() throws Exception {
+        putPositive("[00:01.00]Bonjour\n[00:02.00]Monde\n", "Bonjour\nMonde");
+        // A previous song left the live translation state behind. The old
+        // translationSourceFor path rejects the cache in this situation.
+        setStatic("translationSongId", "song-previous");
+        setStatic("translationSong", new Song());
+        setStatic("translationCallback", new Object());
+        @SuppressWarnings("unchecked")
+        List<Object> lines = (List<Object>) fieldOf(
+                LrclibFallback.class, "translationSourceLines").get(null);
+        lines.clear();
+        lines.add(newLine("Old song", 0));
+        assertNull("old path hides the visible lyrics",
+                LrclibFallback.translationSourceFor(prefs, song));
+
+        Object target = LrclibFallback.translateNowSong(null, null);
+        assertSame(song, target);
+        Object snapshot = LrclibFallback.translateNowSource(prefs, target);
+        assertNotNull("Translate now must use the cached lyrics that are on screen", snapshot);
+        List<?> got = (List<?>) field(snapshot, "lines");
+        assertEquals(2, got.size());
+        assertEquals("Bonjour", text(got.get(0)));
+        assertEquals("Monde", text(got.get(1)));
+        assertEquals(songKey(song), field(snapshot, "songId"));
+        assertEquals("the cache-derived source must be adopted", songKey(song),
+                fieldOf(LrclibFallback.class, "translationSongId").get(null));
+        assertEquals(0, LrclibFallback.waterfallCountForTest());
+    }
+
+    @Test
+    public void translateNowResolvesViaLastSongWhenNoFragmentSongExists() throws Exception {
+        putPositive(null, "Line one\nLine two\nLine three");
+        setStatic("translationSongId", "another-song"); // stale, no live snapshot
+        setStatic("translationCallback", null);
+        @SuppressWarnings("unchecked")
+        List<Object> lines = (List<Object>) fieldOf(
+                LrclibFallback.class, "translationSourceLines").get(null);
+        lines.clear();
+        // No fragment and no player manager on the JVM: only lastSong can tell
+        // us which lyrics are on screen.
+        assertSame(song, LrclibFallback.translateNowSong(null, null));
+        Object snapshot = LrclibFallback.translateNowSource(prefs, song);
+        assertNotNull(snapshot);
+        List<?> got = (List<?>) field(snapshot, "lines");
+        assertEquals(3, got.size());
+        assertEquals("Line one", text(got.get(0)));
+        assertEquals("Line three", text(got.get(2)));
+        assertEquals(0, LrclibFallback.waterfallCountForTest());
+    }
+
+    @Test
+    public void translateNowReportsNoLyricsWhenNothingIsCachedOrRendered() throws Exception {
+        setStatic("lastSong", null);
+        setStatic("lastCallback", null);
+        clearLyricsCallbacks();
+        clearLiveSource();
+
+        assertNull(LrclibFallback.translateNowSong(null, null));
+        assertNull(LrclibFallback.translateNowSource(prefs, song));
+        assertEquals(0, LrclibFallback.waterfallCountForTest());
+    }
+
     // ---- helpers ----
+
+    @SuppressWarnings("unchecked")
+    private static void clearLyricsCallbacks() throws Exception {
+        Map<String, ?> callbacks = (Map<String, ?>) fieldOf(
+                LrclibFallback.class, "lyricsCallbacks").get(null);
+        callbacks.clear();
+    }
 
     private void putPositive(String synced, String plain) throws Exception {
         JSONObject j = new JSONObject();

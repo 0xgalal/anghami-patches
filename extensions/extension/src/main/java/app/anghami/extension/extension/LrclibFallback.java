@@ -944,7 +944,11 @@ public final class LrclibFallback {
         Object title = getFieldUp(songObj, "title");
         Object artist = getFieldUp(songObj, "artistName");
         Object dur = getFieldUp(songObj, "duration");
-        if (id instanceof String) s.id = (String) id;
+        // Some Anghami builds expose the id as a Number, others as a String.
+        // Normalize here so cache keys, songKey and snapshot ids can never
+        // disagree about which song is on screen.
+        if (id instanceof String) s.id = ((String) id).trim();
+        else if (id instanceof Number) s.id = String.valueOf(id);
         if (title instanceof String) s.title = ((String) title).trim();
         if (artist instanceof String) s.artist = ((String) artist).trim();
         if (dur instanceof Number) {
@@ -1161,6 +1165,89 @@ public final class LrclibFallback {
         }
     }
 
+    /**
+     * Song the "Translate now" action must act on. Uses the same precedence as
+     * the rendered view: the live player song, then the song the dialog was
+     * opened for, then the last song whose lyrics were actually rendered.
+     * Package-private so tests can call it without a running player.
+     */
+    static Object translateNowSong(Object dialogSong, Object fragmentObj) {
+        Object activeFragment = fragmentObj != null
+                ? fragmentObj
+                : playerFragment == null ? null : playerFragment.get();
+        Object target = currentSongFromPlayer(activeFragment);
+        if (target == null) target = dialogSong;
+        if (target == null) {
+            synchronized (LrclibFallback.class) {
+                target = lastSong;
+            }
+        }
+        return target;
+    }
+
+    /**
+     * Source for "Translate now", resolved from the same identity and cache
+     * state the display path used. Unlike {@link #translationSourceFor} a stale
+     * translationSongId or an unresolved weak callback never hides lyrics that
+     * are already on screen: a positive cache hit for the target song wins and
+     * is adopted as the current source. Package-private for tests.
+     */
+    static SourceSnapshot translateNowSource(SharedPreferences p, Object target) {
+        if (target == null) {
+            logTranslation("translateNowSource: no song from player/dialog/lastSong");
+            return null;
+        }
+        SongInfo song;
+        String wanted;
+        String key;
+        try {
+            song = readSong(target);
+            if (song == null) return null;
+            wanted = songKey(song);
+            key = cacheKey(song);
+        } catch (Throwable t) {
+            Log.d(TAG, "translateNowSource failed to read song: " + t);
+            return null;
+        }
+        SourceSnapshot live = liveSourceSnapshot(target);
+        if (live != null) return live;
+
+        // This is the exact key paintCached/substituteCached wrote. A hit means
+        // these lyrics are (or were) rendered for this song, so translation must
+        // proceed even when the in-memory translation state belongs to another
+        // song or was cleared by a view recreation.
+        Cached hit = p == null ? null : lookupCache(p, song, key);
+        if (!hasUsableLyrics(hit)) {
+            logTranslation("translateNowSource: no live source, no cached lyrics for "
+                    + wanted + " (cacheKey=" + key + ")");
+            return null;
+        }
+        SourceSnapshot cached = cachedSourceSnapshot(p, target);
+        if (cached == null || cached.lines.isEmpty()) {
+            logTranslation("translateNowSource: cache hit had no usable lines for "
+                    + wanted + " (cacheKey=" + key + ")");
+            return null;
+        }
+        if (cached.callback == null) {
+            logTranslation("translateNowSource: cached lyrics for " + wanted
+                    + " have no live callback; render will re-resolve the visible view");
+        }
+        // Seed the render state from the displayed/cached source so the
+        // consistency checks in translateAndRender see the same text.
+        adoptSourceSnapshot(cached);
+        logTranslation("translateNowSource: using cached lyrics for " + wanted
+                + " (cacheKey=" + key + ", lines=" + cached.lines.size()
+                + ", callback=" + (cached.callback != null) + ")");
+        return cached;
+    }
+
+    /** Convenience overload: derive the cache context from the caller or a live View. */
+    static SourceSnapshot translateNowSource(Context ctx, Object target) {
+        Context sourceCtx = ctx != null ? ctx : translationContext(target);
+        SharedPreferences p = sourceCtx == null ? null : prefs(sourceCtx);
+        return translateNowSource(p, target);
+    }
+
     private static Object callbackForSong(Object songObj) {
         try {
             if (songObj == null) return null;
@@ -1175,6 +1262,23 @@ public final class LrclibFallback {
                 if (lastCallback != null && lastSong != null) {
                     SongInfo last = readSong(lastSong);
                     if (last != null && wantedId.equals(songKey(last))) return lastCallback;
+                }
+                // The last rendered callback is often a live lyrics View whose
+                // own song field was refreshed with a slightly different song
+                // object (id format/feat. suffix). Match on its identity before
+                // giving up — otherwise a cache hit is wrongly reported as
+                // "no lyrics" even though those lyrics are on screen.
+                if (lastCallback instanceof View) {
+                    try {
+                        Object viewSong = getFieldUp(lastCallback, "c");
+                        if (viewSong != null) {
+                            SongInfo fromView = readSong(viewSong);
+                            if (fromView != null && wantedId.equals(songKey(fromView))) {
+                                return lastCallback;
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
                 }
                 if (translationCallback != null && wantedId.equals(translationSongId)) {
                     return translationCallback;
@@ -3156,8 +3260,10 @@ public final class LrclibFallback {
                                                final Object fragmentObj,
                                                final boolean includeAutoToggle) {
         final boolean configOnly = song == null;
+        // Use the same cache/render-backed resolution as the Translate-now
+        // action: a stale live source must not hide lyrics already on screen.
         final SourceSnapshot initialSource =
-                configOnly ? null : translationSourceFor(ctx, song);
+                configOnly ? null : translateNowSource(ctx, song);
         if (!configOnly && initialSource == null) {
             Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
             return;
@@ -3466,8 +3572,8 @@ public final class LrclibFallback {
                     }
                     return;
                 }
-                final SourceSnapshot snapshot = translationSourceFor(ctx, song);
-                if (snapshot == null) {
+                final SourceSnapshot snapshot = translateNowSource(ctx, song);
+                if (snapshot == null || snapshot.lines.isEmpty()) {
                     Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
                     return;
                 }
@@ -3496,16 +3602,7 @@ public final class LrclibFallback {
                                                       Object fragmentObj, AlertDialog dialog) {
         try {
             if (ctx == null) return;
-            Object activeFragment = fragmentObj != null
-                    ? fragmentObj
-                    : playerFragment == null ? null : playerFragment.get();
-            Object target = currentSongFromPlayer(activeFragment);
-            if (target == null) target = song;
-            if (target == null) {
-                synchronized (LrclibFallback.class) {
-                    target = lastSong;
-                }
-            }
+            Object target = translateNowSong(song, fragmentObj);
             TranslationSettings settings = readTranslationSettings(ctx);
             String missing = missingTranslationConfig(settings.provider, settings.apiKey,
                     settings.accountId, settings.model, settings.language);
@@ -3514,14 +3611,31 @@ public final class LrclibFallback {
                 return;
             }
             if (target == null) {
+                Log.d(TAG, "Translate now: no song from player, dialog or lastSong");
                 Toast.makeText(ctx, tr("no_loaded"), Toast.LENGTH_SHORT).show();
                 return;
             }
-            SourceSnapshot snapshot = translationSourceFor(ctx, target);
+            SourceSnapshot snapshot = translateNowSource(ctx, target);
             if ((snapshot == null || snapshot.lines.isEmpty())
                     && song != null && song != target) {
-                target = song;
-                snapshot = translationSourceFor(ctx, target);
+                SourceSnapshot fallback = translateNowSource(ctx, song);
+                if (fallback != null && !fallback.lines.isEmpty()) {
+                    target = song;
+                    snapshot = fallback;
+                }
+            }
+            if (snapshot == null || snapshot.lines.isEmpty()) {
+                Object last;
+                synchronized (LrclibFallback.class) {
+                    last = lastSong;
+                }
+                if (last != null && last != target && last != song) {
+                    SourceSnapshot fromLast = translateNowSource(ctx, last);
+                    if (fromLast != null && !fromLast.lines.isEmpty()) {
+                        target = last;
+                        snapshot = fromLast;
+                    }
+                }
             }
             if (snapshot == null || snapshot.lines.isEmpty()) {
                 Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
@@ -4439,8 +4553,16 @@ public final class LrclibFallback {
                 if (key != null) writeTranslationCache(prefs, key, values);
             } catch (Throwable t) {
                 failed++;
-                if (firstError == null) firstError = safeTranslationError(t);
-                logTranslation("translation batch " + i + " failed: " + t);
+                String reason = safeTranslationError(t);
+                if (firstError == null) firstError = reason;
+                // One empty model response is a failed batch, not a failed
+                // song: its lines stay original and the other batches still
+                // render. Keep the log line concise enough for logcat.
+                if (reason.contains("no response text")) {
+                    logTranslation("translation batch " + i + " returned an empty model response");
+                } else {
+                    logTranslation("translation batch " + i + " failed: " + reason);
+                }
                 values = new ArrayList<String>();
             }
             results.add(values);
@@ -4608,7 +4730,18 @@ public final class LrclibFallback {
                 }
             }
             if (detail.length() == "Cloudflare Workers AI".length()) {
-                detail.append(" request failed");
+                String message = root.optString("message", "");
+                JSONArray messages = root.optJSONArray("messages");
+                if (message.isEmpty() && messages != null && messages.length() > 0) {
+                    Object first = messages.opt(0);
+                    if (first instanceof String) {
+                        message = (String) first;
+                    } else if (first instanceof JSONObject) {
+                        JSONObject m = (JSONObject) first;
+                        message = m.optString("message", m.optString("content", ""));
+                    }
+                }
+                detail.append(message.isEmpty() ? " request failed" : ": " + message);
             }
             return detail.toString();
         } catch (Exception ignored) {
@@ -4616,65 +4749,108 @@ public final class LrclibFallback {
         }
     }
 
-    /** Pull the assistant's raw text out of either Cloudflare's or an OpenAI-style envelope. */
+    /**
+     * Pull the assistant's raw text out of a Cloudflare Workers AI envelope or
+     * an OpenAI-style envelope. Workers AI models return several shapes in the
+     * wild, so every plausible text location is tried before declaring a batch
+     * empty. Non-JSON/truncated bodies are left to the lenient salvage path in
+     * parseTranslationResponse, which handles them from the raw text.
+     */
     private static String extractTranslationContent(String body) throws Exception {
-        JSONObject root = new JSONObject(body);
-        if (root.has("success") && root.has("result")) {
-            String failure = cloudflareFailureMessage(body);
-            if (failure != null) throw new Exception(failure);
-            JSONObject result = root.optJSONObject("result");
-            Object response = result == null ? null : result.opt("response");
-            if (response instanceof String) return ((String) response).trim();
-            // Some Workers AI models return structured content instead of a
-            // plain string. Accept the shapes we can read and leave the rest
-            // to the lenient salvage path in parseTranslationResponse.
-            if (response instanceof JSONArray) {
-                StringBuilder combined = new StringBuilder();
-                JSONArray parts = (JSONArray) response;
-                for (int i = 0; i < parts.length(); i++) {
-                    Object part = parts.opt(i);
-                    if (part instanceof String) {
-                        combined.append((String) part);
-                    } else if (part instanceof JSONObject) {
-                        JSONObject partObject = (JSONObject) part;
-                        combined.append(partObject.optString("text",
-                                partObject.optString("content", "")));
-                    }
-                }
-                String text = combined.toString().trim();
-                if (!text.isEmpty()) return text;
-            } else if (response instanceof JSONObject) {
-                JSONObject responseObject = (JSONObject) response;
-                String text = responseObject.optString("text",
-                        responseObject.optString("content", "")).trim();
-                if (!text.isEmpty()) return text;
-            }
-            throw new Exception("Cloudflare Workers AI returned no response text");
-        }
+        JSONObject root = new JSONObject(body); // JSON failures are salvaged by the caller.
+
+        // Cloudflare error envelopes are commonly returned with HTTP 200. Give
+        // the real errors[].message/code instead of a misleading "no text".
+        String failure = cloudflareFailureMessage(body);
+        if (failure != null) throw new Exception(failure);
+
+        String text = cloudflareResultText(root);
+        if (text != null && !text.trim().isEmpty()) return text.trim();
+
         JSONArray choices = root.optJSONArray("choices");
-        if (choices == null || choices.length() == 0) {
-            throw new Exception("Translation provider returned no choices");
-        }
-        JSONObject choice = choices.optJSONObject(0);
-        JSONObject message = choice == null ? null : choice.optJSONObject("message");
-        if (message == null) throw new Exception("Translation provider returned an empty response");
-        String finishReason = choice.optString("finish_reason", "");
-        if ("length".equalsIgnoreCase(finishReason)
-                || "max_tokens".equalsIgnoreCase(finishReason)) {
-            throw new Exception("Translation response reached the model's output limit");
-        }
-        Object contentValue = message.opt("content");
-        if (contentValue instanceof String) return ((String) contentValue).trim();
-        if (contentValue instanceof JSONArray) {
-            StringBuilder combined = new StringBuilder();
-            JSONArray parts = (JSONArray) contentValue;
-            for (int i = 0; i < parts.length(); i++) {
-                JSONObject part = parts.optJSONObject(i);
-                if (part != null) combined.append(part.optString("text", ""));
+        if (choices != null && choices.length() > 0) {
+            String fromChoices = choicesText(choices);
+            if (fromChoices != null && !fromChoices.trim().isEmpty()) return fromChoices.trim();
+            JSONObject choice = choices.optJSONObject(0);
+            String finishReason = choice == null ? "" : choice.optString("finish_reason", "");
+            if ("length".equalsIgnoreCase(finishReason)
+                    || "max_tokens".equalsIgnoreCase(finishReason)) {
+                throw new Exception("Translation response reached the model's output limit");
             }
-            return combined.toString().trim();
         }
-        throw new Exception("Translation provider returned unsupported content");
+        // Last resort for non-enveloped provider responses.
+        text = firstUsableText(root, "output", "text", "content", "response");
+        if (text != null && !text.trim().isEmpty()) return text.trim();
+        throw new Exception("Cloudflare Workers AI returned no response text");
+    }
+
+    /** All Workers AI result shapes: result.response, alternate fields, or a bare result. */
+    private static String cloudflareResultText(JSONObject root) {
+        Object result = root.opt("result");
+        String text = firstUsableText(result, "response", "text", "content", "output");
+        if (text != null && !text.trim().isEmpty()) return text;
+        if (result instanceof JSONObject) {
+            text = choicesText(((JSONObject) result).optJSONArray("choices"));
+            if (text != null && !text.trim().isEmpty()) return text;
+        }
+        // result itself may be the model string or an array of text parts.
+        return messageText(result);
+    }
+
+    /** Text from choices[0].message.content (or the choice's own text field). */
+    private static String choicesText(JSONArray choices) {
+        if (choices == null) return null;
+        for (int i = 0; i < choices.length(); i++) {
+            JSONObject choice = choices.optJSONObject(i);
+            if (choice == null) continue;
+            JSONObject message = choice.optJSONObject("message");
+            String text = message == null ? null : messageText(message.opt("content"));
+            if (text != null && !text.trim().isEmpty()) return text;
+            text = firstUsableText(choice.opt("text"));
+            if (text != null && !text.trim().isEmpty()) return text;
+        }
+        return null;
+    }
+
+    /** OpenAI-style message content: a string, a parts array, or a text object. */
+    private static String messageText(Object content) {
+        return firstUsableText(content, "text", "content");
+    }
+
+    /**
+     * Find the first non-empty text inside a JSON value: a bare string, one of
+     * {@code keys} of an object, or the joined strings of an array. Empty and
+     * whitespace-only fields are skipped so an empty result.response cannot
+     * mask a valid alternate field.
+     */
+    private static String firstUsableText(Object node, String... keys) {
+        if (node == null) return null;
+        if (node instanceof String) {
+            String s = ((String) node).trim();
+            return s.isEmpty() ? null : s;
+        }
+        if (node instanceof JSONObject) {
+            JSONObject object = (JSONObject) node;
+            for (String key : keys) {
+                String found = firstUsableText(object.opt(key));
+                if (found != null && !found.trim().isEmpty()) return found;
+            }
+            return null;
+        }
+        if (node instanceof JSONArray) {
+            JSONArray array = (JSONArray) node;
+            StringBuilder combined = new StringBuilder();
+            for (int i = 0; i < array.length(); i++) {
+                String part = firstUsableText(array.opt(i));
+                if (part != null && !part.trim().isEmpty()) {
+                    if (combined.length() > 0) combined.append('\n');
+                    combined.append(part.trim());
+                }
+            }
+            String text = combined.toString().trim();
+            return text.isEmpty() ? null : text;
+        }
+        return null;
     }
 
     private static final Pattern TRANSLATION_LINES_KEY =

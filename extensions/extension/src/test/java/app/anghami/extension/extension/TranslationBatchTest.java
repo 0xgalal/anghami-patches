@@ -250,6 +250,46 @@ public class TranslationBatchTest {
     }
 
     @Test
+    public void oneEmptyCloudflareBatchLeavesOnlyItsLinesOriginal() {
+        SharedPreferences p = prefs();
+        List<LrclibFallback.Line> src = lines(60);
+        List<List<LrclibFallback.Line>> batches = LrclibFallback.translationBatchesFor(
+                TranslationProvider.CLOUDFLARE, TranslationProvider.CLOUDFLARE.defaultModel, src);
+        assertTrue(batches.size() > 1);
+
+        final int[] calls = {0};
+        LrclibFallback.BatchTranslator emptySecondBatch = (batch, prompt) -> {
+            int index = calls[0]++;
+            if (index == 1) {
+                throw new Exception("Cloudflare Workers AI returned no response text");
+            }
+            List<String> out = new ArrayList<String>();
+            for (LrclibFallback.Line l : batch) out.add("T" + l.text);
+            return out;
+        };
+        LrclibFallback.BatchOutcome outcome = LrclibFallback.translateBatches(p,
+                TranslationProvider.CLOUDFLARE, "acct", "model", "French", false, "",
+                batches, emptySecondBatch);
+
+        assertEquals(1, outcome.failedBatches);
+        assertTrue(outcome.firstError.contains("no response text"));
+        assertEquals(60, outcome.lines.size());
+        int offset = 0;
+        for (int b = 0; b < batches.size(); b++) {
+            for (int j = 0; j < batches.get(b).size(); j++) {
+                int line = offset + j;
+                if (b == 1) {
+                    assertEquals("empty batch keeps the original line", "", outcome.lines.get(line));
+                } else {
+                    assertEquals("TSource" + line, outcome.lines.get(line));
+                }
+            }
+            offset += batches.get(b).size();
+        }
+        assertEquals(60, offset);
+    }
+
+    @Test
     public void batchCacheKeyDependsOnConfigAndItsOwnLinesOnly() throws Exception {
         String model = "model-id";
         List<LrclibFallback.Line> batch = new ArrayList<LrclibFallback.Line>();
