@@ -1,3 +1,9 @@
+## [1.17.7](https://github.com/0xgalal/anghami-patches/compare/v1.17.6...v1.17.7) (2026-11-21)
+
+### 🐛 Bug Fixes
+
+* run lyrics autofill without AI patch and clear native loading spinner ([01b4e60](https://github.com/0xgalal/anghami-patches/commit/01b4e6073477792af050d973a3da9b918966454f))
+
 ## [1.17.6](https://github.com/0xgalal/anghami-patches/compare/v1.17.5...v1.17.6) (2026-11-21)
 
 ### 🐛 Bug Fixes

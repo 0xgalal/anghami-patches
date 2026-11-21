@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-21T03:58:40",
-  "description": "## [1.17.6](https://github.com/0xgalal/anghami-patches/compare/v1.17.5...v1.17.6) (2026-11-21)\n\n### 🐛 Bug Fixes\n\n* auto-fill lyrics in Lyrics mode and search all sources ([9c634eb](https://github.com/0xgalal/anghami-patches/commit/9c634ebfed9281f3ba42ee952461aa7275adc186))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.6/patches-1.17.6.mpp",
+  "created_at": "2026-11-21T04:32:37",
+  "description": "## [1.17.7](https://github.com/0xgalal/anghami-patches/compare/v1.17.6...v1.17.7) (2026-11-21)\n\n### 🐛 Bug Fixes\n\n* run lyrics autofill without AI patch and clear native loading spinner ([01b4e60](https://github.com/0xgalal/anghami-patches/commit/01b4e6073477792af050d973a3da9b918966454f))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.7/patches-1.17.7.mpp",
   "signature_download_url": "",
-  "version": "1.17.6"
+  "version": "1.17.7"
 }
