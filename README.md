@@ -162,6 +162,13 @@ system prompt, and cached translations are stored in app-private preferences.
 Translations are cached by lyric, provider, model, target language, and system prompt;
 only uncached lyrics are sent to the selected provider.
 
+Translation always uses lyrics already cached on the device when they are available —
+both for automatic translation and for the **Translate now** button. The source text is
+read from the same local `lyrics_fallback` cache the lyrics view uses, so translating a
+song never fetches its lyrics from LRCLIB / LyricsPlus / Better Lyrics again. If there is
+no usable cached entry, translation simply has no source (the original behavior); it does
+not trigger a new lyrics search on its own.
+
 ### 🛠️ Building locally
 
 - Run `./gradlew buildAndroid`
