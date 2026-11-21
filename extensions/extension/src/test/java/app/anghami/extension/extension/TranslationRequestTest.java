@@ -454,6 +454,67 @@ public class TranslationRequestTest {
     }
 
     @Test
+    public void cloudflareEmptyResultResponseIsReportedAsEmptyText() throws Exception {
+        // Cloudflare answered 200 but the model emitted nothing. This must be
+        // an ordinary per-batch failure, not a crash in the HTTP layer.
+        responses.add(new Response(200, cloudflareResponse("   ")));
+        Exception error = assertThrows(Exception.class,
+                () -> translateCloudflare("cf-token", "acct123"));
+        assertTrue("unexpected message: " + error.getMessage(),
+                error.getMessage().contains("no response text"));
+        assertEquals(1, connections.size());
+    }
+
+    @Test
+    public void cloudflareAcceptsAlternateTextLocations() throws Exception {
+        String content = new JSONObject()
+                .put("lines", new JSONArray().put("Bonjour")).toString();
+        // result.text instead of result.response
+        responses.add(new Response(200, new JSONObject().put("success", true)
+                .put("result", new JSONObject().put("text", content)).toString()));
+        assertEquals(Arrays.asList("Bonjour"), translateCloudflare("cf-token", "acct123"));
+
+        // result is a bare string
+        responses.add(new Response(200, new JSONObject().put("success", true)
+                .put("result", content).toString()));
+        assertEquals(Arrays.asList("Bonjour"), translateCloudflare("cf-token", "acct123"));
+
+        // top-level output
+        responses.add(new Response(200, new JSONObject().put("success", true)
+                .put("output", content).toString()));
+        assertEquals(Arrays.asList("Bonjour"), translateCloudflare("cf-token", "acct123"));
+
+        // result.response exists but is empty; the real text is in result.content
+        responses.add(new Response(200, new JSONObject().put("success", true)
+                .put("result", new JSONObject().put("response", "")
+                        .put("content", content)).toString()));
+        assertEquals(Arrays.asList("Bonjour"), translateCloudflare("cf-token", "acct123"));
+    }
+
+    @Test
+    public void cloudflareErrorEnvelopeWithoutErrorsArraySurfacesMessage() {
+        responses.add(new Response(200, "{\"success\":false,"
+                + "\"messages\":[{\"message\":\"Rate limited\"}]}"));
+        Exception error = assertThrows(Exception.class,
+                () -> translateCloudflare("cf-token", "acct123"));
+        assertTrue(error.getMessage().contains("Rate limited"));
+        assertEquals(1, connections.size());
+    }
+
+    @Test
+    public void cloudflareNonJsonBodyIsSalvagedAsPlainLines() throws Exception {
+        // A truncated/non-JSON body must not abort the job with an envelope
+        // parse error: the lenient path recovers usable text from the raw body.
+        // (readUtf8 joins HTTP lines, so a single-line reply is the realistic
+        // shape for a body with no JSON envelope at all.)
+        String body = "Bonjour le monde";
+        responses.add(new Response(200, body));
+        assertEquals(Arrays.asList("Bonjour le monde"),
+                invokeCloudflareRequest("cf-token", "acct123", sourceWithLines(1)));
+        assertEquals(1, connections.size());
+    }
+
+    @Test
     public void cloudflareCatalogErrorIsNotSwallowedIntoAnEmptyModelList() {
         responses.add(new Response(401, "{\"success\":false,\"errors\":[{\"code\":10000,"
                 + "\"message\":\"denied\"}]}"));
