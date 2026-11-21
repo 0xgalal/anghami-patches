@@ -278,12 +278,24 @@ val lyricsOpenRouterTranslationPatch = bytecodePatch(
         )
 
         // The Lyrics button uses a native View click listener. Add a
-        // separate long-click listener without changing its ordinary click.
-        // Single static call at method entry (label-safe).
+        // separate long-click listener without changing its ordinary click,
+        // plus a proactive fill when Lyrics mode is active but empty.
+        // Single static calls at method entry (label-safe).
         PlayerLyricsButtonResumeFingerprint.method.addInstructions(
             0,
             """
                 invoke-static {p0}, $FALLBACK_HELPER->installLyricsButtonLongPress(Ljava/lang/Object;)V
+                invoke-static {p0}, $FALLBACK_HELPER->fillLyricsIfLyricsModeActive(Ljava/lang/Object;)V
+            """
+        )
+
+        // Covers tapping Lyrics after onResume: the mode-change callback
+        // receives the new mode in p1. Branch-free entry insert using only
+        // incoming parameters.
+        LyricsModeRevertFingerprint.method.addInstructions(
+            0,
+            """
+                invoke-static {p0, p1}, $FALLBACK_HELPER->fillLyricsForMode(Ljava/lang/Object;Ljava/lang/Object;)V
             """
         )
     }

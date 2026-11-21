@@ -187,11 +187,27 @@ public final class LrclibFallback {
     private static final List<Line> translationSourceLines = new ArrayList<Line>();
     private static final Set<String> translationRequestsInFlight =
             new HashSet<String>();
+    // The snapshot a translation request started with stays authoritative
+    // until its result handler runs, so cache adoption during that window
+    // cannot trigger a false "source changed".
+    private static final Map<String, SourceSnapshot> inFlightSnapshots =
+            new java.util.HashMap<String, SourceSnapshot>();
     // A cached "no lyrics" still gets one background re-check per cooldown
     // window, so a source recovering later updates the view on its own.
     private static final Map<String, Long> missRetryTimes =
             new java.util.HashMap<String, Long>();
     private static final long MISS_RETRY_COOLDOWN_MS = 60L * 1000;
+
+    // ---- proactive fill (Lyrics tab active but nothing on screen) ----
+    // One search per song at a time, plus the miss cooldown above, keeps the
+    // onResume/mode-observer hooks from hammering a source when a song really
+    // has no lyrics.
+    private static final Set<String> fillInFlight = new HashSet<String>();
+    private static final Map<String, Long> nativeFullRenderTimes =
+            new java.util.HashMap<String, Long>();
+    private static final long NATIVE_RENDER_FRESH_MS = 10L * 60 * 1000;
+    private static String lastRenderedSongKey = "";
+    private static boolean lastRenderedRealLyrics;
 
     // ================= entry points =================
 
@@ -420,24 +436,458 @@ public final class LrclibFallback {
         return currentPlayingSong();
     }
 
+    /** The native Lyrics mode enum value, or null when reflection cannot read it. */
+    private static Object lyricsModeValue() {
+        try {
+            Class<?> modeClass =
+                    Class.forName("com.anghami.player.ui.PlayerFragmentViewModel$c");
+            return modeClass.getField("b").get(null);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static boolean isLyricsModeValue(Object modeObj) {
+        Object lyricsMode = lyricsModeValue();
+        return modeObj != null && lyricsMode != null && modeObj == lyricsMode;
+    }
+
+    /**
+     * Current player mode state: TRUE = Lyrics, FALSE = another mode, null =
+     * undetectable. Shared by the mode guard below and the proactive fill so
+     * both read the same `_playerMode` / `d()` / enum `b` fields.
+     */
+    private static Boolean lyricsModeState(Object fragmentObj) {
+        try {
+            if (fragmentObj == null) return null;
+            Object viewModel = getFieldUp(fragmentObj, "n1");
+            if (viewModel == null) return null;
+            Object modeState = getFieldUp(viewModel, "_playerMode");
+            if (modeState == null) return null;
+            Object currentMode = modeState.getClass().getMethod("d").invoke(modeState);
+            return isLyricsModeValue(currentMode);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** True only when the player is actually showing the Lyrics tab. */
+    static boolean isLyricsModeActive(Object fragmentObj) {
+        return Boolean.TRUE.equals(lyricsModeState(fragmentObj));
+    }
+
     /** Enables Lyrics mode without toggling it off when it is already active. */
     private static void ensureLyricsMode(Object fragmentObj) {
         try {
             if (fragmentObj == null) return;
-            Object viewModel = getFieldUp(fragmentObj, "n1");
-            if (viewModel == null) return;
-            Object modeState = getFieldUp(viewModel, "_playerMode");
-            if (modeState == null) return;
-            Object currentMode = modeState.getClass().getMethod("d").invoke(modeState);
-            Class<?> modeClass =
-                    Class.forName("com.anghami.player.ui.PlayerFragmentViewModel$c");
-            Object lyricsMode = modeClass.getField("b").get(null);
-            if (currentMode != lyricsMode) {
-                viewModel.getClass().getMethod("onLyricsClicked").invoke(viewModel);
+            Boolean active = lyricsModeState(fragmentObj);
+            if (active == null) return;
+            if (!active) {
+                Object viewModel = getFieldUp(fragmentObj, "n1");
+                if (viewModel != null) {
+                    viewModel.getClass().getMethod("onLyricsClicked").invoke(viewModel);
+                }
             }
         } catch (Throwable t) {
             Log.d(TAG, "ensureLyricsMode failed: " + t);
         }
+    }
+
+    // ================= proactive lyrics fill =================
+
+    /**
+     * Entry called from PlayerFragment.onResume. If the Lyrics tab is already
+     * active but no lyrics are on screen, fill it from the selected sources.
+     * One static call at method entry; every decision lives here.
+     */
+    public static void fillLyricsIfLyricsModeActive(Object fragmentObj) {
+        if (!isLyricsModeActive(fragmentObj)) return;
+        runLyricsFill(fragmentObj);
+    }
+
+    /**
+     * Entry for the player-mode observer (`a1`). The observer receives the new
+     * mode as an argument before the ViewModel state settles, so pass that value
+     * directly. Also covers tapping Lyrics after onResume already ran.
+     */
+    public static void fillLyricsForMode(Object fragmentObj, Object modeObj) {
+        if (!isLyricsModeValue(modeObj)) return;
+        runLyricsFill(fragmentObj);
+    }
+
+    private static void runLyricsFill(Object fragmentObj) {
+        try {
+            if (fragmentObj == null) return;
+            Object songObj = currentSongFromPlayer(fragmentObj);
+            if (songObj == null) return;
+            SongInfo song = readSong(songObj);
+            if (song == null || song.title.isEmpty()) return;
+            playerFragment = new WeakReference<Object>(fragmentObj);
+
+            Object callback = callbackForSong(songObj);
+            Context ctx = appContextOf(callback);
+            if (ctx == null) {
+                Object target = getFieldUp(fragmentObj, "V");
+                if (target instanceof View) ctx = ((View) target).getContext();
+            }
+            if (ctx == null) return;
+            // Refresh the song-bound callback so a view recreated since the
+            // last render wins over a stale one. evaluate/render always resolve
+            // callbackForSong again at paint time.
+            if (callback != null) rememberLyricsTarget(songObj, callback);
+
+            String queueKey = songKey(song);
+            FillDecision decision = decideFill(true, hasRenderedLyricsFor(songObj),
+                    isFillInFlight(queueKey), prefs(ctx), song,
+                    System.currentTimeMillis());
+            if (decision.action == FillAction.NONE) return;
+            executeFillDecision(ctx, songObj, song, callback, prefs(ctx), decision);
+        } catch (Throwable t) {
+            Log.d(TAG, "fillLyricsIfLyricsModeActive failed: " + t);
+        }
+    }
+
+    enum FillAction { NONE, FROM_CACHE, SEARCH }
+
+    /**
+     * Progress state machine for a lyrics search. A search replaces the native
+     * loading spinner with our status line immediately; a final result or a
+     * miss must always replace that status line. Kept package-private and
+     * side-effect-free so the transitions are unit-testable without a View.
+     */
+    static final class SearchRenderState {
+        enum Phase { IDLE, PROGRESS, SUCCESS, MISS }
+
+        Phase phase = Phase.IDLE;
+        String songKey = "";
+
+        /** Starts a search; returns the first line to paint over the spinner. */
+        String begin(String key) {
+            songKey = key == null ? "" : key;
+            phase = Phase.PROGRESS;
+            return tr("searching");
+        }
+
+        /** Progress update; ignored once a final outcome has been recorded. */
+        String progress(String key, String message) {
+            if (!belongs(key) || phase != Phase.PROGRESS) return null;
+            return message;
+        }
+
+        /** Final lyrics; returns the text that must replace the progress line. */
+        String success(String key, String text) {
+            if (!belongs(key)) return null;
+            phase = Phase.SUCCESS;
+            return text;
+        }
+
+        /** Miss; returns the stable message that replaces the progress line. */
+        String miss(String key, String text) {
+            if (!belongs(key)) return null;
+            phase = Phase.MISS;
+            return text;
+        }
+
+        boolean isProgress(String key) {
+            return belongs(key) && phase == Phase.PROGRESS;
+        }
+
+        private boolean belongs(String key) {
+            return songKey.equals(key == null ? "" : key);
+        }
+    }
+
+    /** Immutable result of the pure fill decision; cached hit is read-only. */
+    static final class FillDecision {
+        final FillAction action;
+        final String reason;
+        final Cached hit;
+
+        FillDecision(FillAction action, String reason, Cached hit) {
+            this.action = action;
+            this.reason = reason;
+            this.hit = hit;
+        }
+    }
+
+    /**
+     * Pure decision used by both entry points. Package-private so unit tests can
+     * cover every branch without an Android runtime or a network call.
+     *
+     * @param lyricsModeActive   Lyrics tab is showing
+     * @param lyricsRendered     real lyrics for this song are already on screen
+     * @param inFlight           a fill search for this song is already running
+     * @param p                  fallback preferences (may be null in tests)
+     * @param song               currently playing song
+     * @param nowMs              injected clock for deterministic cooldown tests
+     */
+    static FillDecision decideFill(boolean lyricsModeActive, boolean lyricsRendered,
+                                   boolean inFlight, SharedPreferences p,
+                                   SongInfo song, long nowMs) {
+        if (!lyricsModeActive) return new FillDecision(FillAction.NONE, "mode", null);
+        if (song == null || song.title.isEmpty()) {
+            return new FillDecision(FillAction.NONE, "no song", null);
+        }
+        if (lyricsRendered) return new FillDecision(FillAction.NONE, "rendered", null);
+        if (inFlight) return new FillDecision(FillAction.NONE, "in flight", null);
+        if (p == null) return new FillDecision(FillAction.NONE, "no prefs", null);
+
+        String key = cacheKey(song);
+        Cached hit = lookupCache(p, song, key);
+        if (hasUsableLyrics(hit)) {
+            return new FillDecision(FillAction.FROM_CACHE, "cache", hit);
+        }
+        // A negative entry or a cooldown slot means "recently looked, nothing
+        // found". Wait out the cooldown instead of re-querying every onResume.
+        if (!shouldRetryMiss(key, nowMs)) {
+            return new FillDecision(FillAction.NONE, "miss cooldown", null);
+        }
+        return new FillDecision(FillAction.SEARCH, "search", null);
+    }
+
+    private static boolean isFillInFlight(String songKey) {
+        synchronized (LrclibFallback.class) {
+            return fillInFlight.contains(songKey);
+        }
+    }
+
+    /**
+     * True when real lyrics for this song are still visible. Covers both our
+     * own renders and full native lyrics that bypassed the fallback.
+     */
+    static boolean hasRenderedLyricsFor(Object songObj) {
+        try {
+            SongInfo song = readSong(songObj);
+            if (song == null) return false;
+            String wanted = songKey(song);
+            synchronized (LrclibFallback.class) {
+                if (callbackForSong(songObj) == null) return false;
+                if (wanted.equals(lastRenderedSongKey) && lastRenderedRealLyrics) {
+                    return true;
+                }
+                Long nativeMs = nativeFullRenderTimes.get(wanted);
+                return nativeMs != null
+                        && System.currentTimeMillis() - nativeMs < NATIVE_RENDER_FRESH_MS;
+            }
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Records a full native render so the proactive fill does not overwrite it. */
+    private static void markNativeLyricsRendered(Object songObj) {
+        try {
+            SongInfo song = readSong(songObj);
+            if (song == null) return;
+            String wanted = songKey(song);
+            synchronized (LrclibFallback.class) {
+                nativeFullRenderTimes.put(wanted, System.currentTimeMillis());
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Clears the native-render mark when the same song shows a teaser/empty. */
+    private static void clearNativeLyricsRendered(Object songObj) {
+        try {
+            SongInfo song = readSong(songObj);
+            if (song == null) return;
+            synchronized (LrclibFallback.class) {
+                nativeFullRenderTimes.remove(songKey(song));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Render seam: production uses renderOnMain; unit tests record the call. */
+    interface LyricsRenderSink {
+        void render(Context ctx, Object songObj, Object callback,
+                    String plain, String synced, String queryUsed);
+    }
+
+    private static final LyricsRenderSink PRODUCTION_RENDER_SINK =
+            new LyricsRenderSink() {
+                @Override
+                public void render(Context ctx, Object songObj, Object callback,
+                                   String plain, String synced, String queryUsed) {
+                    renderOnMain(ctx, songObj, callback, plain, synced, queryUsed, false);
+                    // The native lyrics load can post its spinner state right
+                    // after our render frame. Re-assert the same lyrics once
+                    // the queued native frames have run so the view never
+                    // settles on a loading icon. Guarded to the same song/callback.
+                    settleRenderOnMain(songObj, callback, plain, synced);
+                }
+            };
+
+    private static void settleRenderOnMain(final Object songObj, final Object callback,
+                                           final String plain, final String synced) {
+        try {
+            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Object latest = callbackForSong(songObj);
+                        if (latest == null) latest = callback;
+                        if (latest == null) return;
+                        if (latest instanceof View && songObj != null) {
+                            Object viewSong = getFieldUp(latest, "c");
+                            Object viewId = viewSong == null ? null : getFieldUp(viewSong, "id");
+                            Object songId = getFieldUp(songObj, "id");
+                            if (viewId != null && songId != null
+                                    && !String.valueOf(viewId).equals(String.valueOf(songId))) {
+                                return;
+                            }
+                        }
+                        Object response = buildResponse(songObj, plain, synced);
+                        if (response == null) return;
+                        invokeRender(latest, songObj,
+                                buildLines(response, plain, synced), response);
+                    } catch (Throwable t) {
+                        Log.d(TAG, "settle render failed: " + t);
+                    }
+                }
+            }, 300);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void executeFillDecision(Context ctx, Object songObj, SongInfo song,
+                                            Object callback, SharedPreferences p,
+                                            FillDecision decision) {
+        if (decision.action == FillAction.FROM_CACHE && decision.hit != null) {
+            commitCachedResult(ctx, songObj, callback, decision.hit, PRODUCTION_RENDER_SINK);
+        } else if (decision.action == FillAction.SEARCH) {
+            launchFillSearch(ctx, songObj, song, callback, p);
+        }
+    }
+
+    /** Renders a positive cache hit without touching the network. */
+    static void commitCachedResult(Context ctx, Object songObj, Object callback,
+                                   Cached hit, LyricsRenderSink sink) {
+        if (hit == null || sink == null) return;
+        remember(hit.queryUsed, hit.source, hit.plain, hit.synced);
+        try {
+            SongInfo song = readSong(songObj);
+            seedTranslationForResult(song, songObj, callback, hit.plain, hit.synced);
+        } catch (Throwable ignored) {
+        }
+        sink.render(ctx, songObj, callback, hit.plain, hit.synced, hit.queryUsed);
+    }
+
+    /**
+     * Commits a successful fill search: cache, translation source and render.
+     * Package-private so tests can verify the commit without a network call.
+     */
+    static void commitFoundResult(Context ctx, Object songObj, SongInfo song,
+                                  Object callback, Result result, LyricsRenderSink sink) {
+        if (songObj == null || result == null || sink == null) return;
+        writePositiveCache(ctx, cacheKey(song), result);
+        remember(result.queryUsed, result.source, result.plain, result.synced);
+        seedTranslationForResult(song, songObj, callback, result.plain, result.synced);
+        sink.render(ctx, songObj, callback, result.plain, result.synced, result.queryUsed);
+    }
+
+    /**
+     * Adopts the fetched lyrics as the translation source without starting an
+     * AI request here. renderOnMain starts auto-translation once the lines are
+     * actually on screen, with the same text, so there is no double request.
+     */
+    static boolean seedTranslationForResult(SongInfo song, Object songObj,
+                                            Object callbackObj, String plain,
+                                            String synced) {
+        try {
+            if (song == null || songObj == null || callbackObj == null) return false;
+            List<Line> parsed = parseLrc(synced);
+            boolean useSynced = !parsed.isEmpty()
+                    && (lastPreferSynced || plain == null || plain.trim().isEmpty());
+            List<Line> lines = useSynced ? parsed : plainLines(plain);
+            if (lines.isEmpty()) return false;
+            SourceSnapshot snapshot = new SourceSnapshot();
+            snapshot.songId = songKey(song);
+            snapshot.synced = useSynced;
+            snapshot.song = songObj;
+            snapshot.callback = callbackObj;
+            for (Line source : lines) {
+                Line copy = new Line();
+                copy.text = source.text == null ? "" : source.text;
+                copy.ms = source.ms;
+                snapshot.lines.add(copy);
+            }
+            return adoptSourceSnapshot(snapshot);
+        } catch (Throwable t) {
+            Log.d(TAG, "seedTranslationForResult failed: " + t);
+            return false;
+        }
+    }
+
+    private static void launchFillSearch(final Context ctx, final Object songObj,
+                                         final SongInfo song, final Object callback,
+                                         final SharedPreferences p) {
+        final String queueKey = songKey(song);
+        final String key = cacheKey(song);
+        synchronized (LrclibFallback.class) {
+            if (!fillInFlight.add(queueKey)) return;
+        }
+        final Context appCtx = ctx.getApplicationContext() != null
+                ? ctx.getApplicationContext() : ctx;
+        final SearchRenderState status = new SearchRenderState();
+        // Paint a real status line over the native spinner before any network
+        // work starts; the state machine guarantees a final line replaces it.
+        renderSearchStatus(songObj, callback, status.begin(queueKey));
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Result result = null;
+                try {
+                    result = waterfallForFill(song, p, new SearchProgress() {
+                        @Override
+                        public void update(String message) {
+                            String line = status.progress(queueKey, message);
+                            if (line != null) renderSearchStatus(songObj, callback, line);
+                        }
+                    });
+                } catch (Throwable t) {
+                    Log.d(TAG, "proactive fill search failed: " + t);
+                } finally {
+                    synchronized (LrclibFallback.class) {
+                        fillInFlight.remove(queueKey);
+                    }
+                }
+                Object live = callbackForSong(songObj);
+                Object target = live != null ? live : callback;
+                if (result == null) {
+                    writeNegativeCache(appCtx, key);
+                    String message = status.miss(queueKey, tr("no_results_any"));
+                    if (message != null) renderSearchStatus(songObj, target, message);
+                    Log.d(TAG, "proactive fill: no match for " + song.id);
+                    return;
+                }
+                status.success(queueKey, result.plain != null ? result.plain : result.synced);
+                commitFoundResult(appCtx, songObj, song, target, result, PRODUCTION_RENDER_SINK);
+            }
+        }).start();
+    }
+
+    /**
+     * Preference-aware waterfall: only the selected sources, in configured
+     * order, first usable result wins. Reuses the same per-source helpers as
+     * manual search, so there is no duplicated network code.
+     */
+    private static Result waterfallForFill(SongInfo song, SharedPreferences p,
+                                           SearchProgress progress) {
+        waterfallEntriesForTest++;
+        boolean[] selected = p == null ? parseSelectedSources(null) : loadSelectedSources(p);
+        for (int i = 0; i < LYRIC_SOURCE_IDS.length && i < selected.length; i++) {
+            if (!selected[i]) continue;
+            String id = LYRIC_SOURCE_IDS[i];
+            if (progress != null) {
+                progress.update(String.format(Locale.ROOT, tr("trying_source"),
+                        sourceLabel(id)));
+            }
+            Result r = fromSource(song, id);
+            if (r != null) return r;
+        }
+        return null;
     }
 
     /**
@@ -532,12 +982,17 @@ public final class LrclibFallback {
     }
 
     private static boolean shouldRetryMiss(String key) {
+        return shouldRetryMiss(key, System.currentTimeMillis());
+    }
+
+    /** Time-injected variant used by the pure decision helper and its tests. */
+    static boolean shouldRetryMiss(String key, long nowMs) {
         synchronized (LrclibFallback.class) {
             Long last = missRetryTimes.get(key);
-            if (last != null && System.currentTimeMillis() - last < MISS_RETRY_COOLDOWN_MS) {
+            if (last != null && nowMs - last < MISS_RETRY_COOLDOWN_MS) {
                 return false;
             }
-            missRetryTimes.put(key, System.currentTimeMillis());
+            missRetryTimes.put(key, nowMs);
             return true;
         }
     }
@@ -741,7 +1196,15 @@ public final class LrclibFallback {
     public static void substituteCached(Object songObj, Object responseObj, Object callbackObj) {
         try {
             if (songObj == null || responseObj == null || callbackObj == null) return;
-            if (isFullNativeResponse(responseObj)) return;
+            if (isFullNativeResponse(responseObj)) {
+                // Native lyrics are already on screen; the proactive fill must
+                // not overwrite them with a source result on the next resume.
+                markNativeLyricsRendered(songObj);
+                return;
+            }
+            // This song now shows a truncated teaser or nothing: any earlier
+            // full-native render is no longer visible.
+            clearNativeLyricsRendered(songObj);
             Context ctx = appContextOf(callbackObj);
             if (ctx == null) return;
             SongInfo song = readSong(songObj);
@@ -930,7 +1393,7 @@ public final class LrclibFallback {
 
     // ================= song / reflection =================
 
-    private static final class SongInfo {
+    static final class SongInfo {
         String id = "";
         String title = "";
         String artist = "";
@@ -1003,7 +1466,7 @@ public final class LrclibFallback {
         return false;
     }
 
-    private static final class SourceSnapshot {
+    static final class SourceSnapshot {
         String songId;
         boolean synced;
         Object song;
@@ -1044,6 +1507,22 @@ public final class LrclibFallback {
             }
         } catch (Throwable ignored) {
         }
+        // Keep the request's snapshot authoritative while a translation is in
+        // flight: a cache re-read during that window can differ in timestamps
+        // or line metadata without changing the lyrics the user sees.
+        try {
+            SongInfo song = readSong(songObj);
+            if (song != null) {
+                SourceSnapshot inFlight = inFlightSnapshot(songKey(song));
+                if (inFlight != null) {
+                    SourceSnapshot stable = copySnapshot(inFlight);
+                    Object liveCallback = callbackForSong(songObj);
+                    if (liveCallback != null) stable.callback = liveCallback;
+                    return stable;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         SourceSnapshot cached = cachedSourceSnapshot(p, songObj);
         if (cached == null || cached.callback == null) return null;
         // Adopt the cached lines as the current source so the consistency
@@ -1051,6 +1530,28 @@ public final class LrclibFallback {
         // the same text without another cache read or a new lyrics request.
         adoptSourceSnapshot(cached);
         return cached;
+    }
+
+    /** Snapshot a translation request started with, while it is in flight. */
+    static SourceSnapshot inFlightSnapshot(String songId) {
+        synchronized (LrclibFallback.class) {
+            return inFlightSnapshots.get(songId);
+        }
+    }
+
+    private static SourceSnapshot copySnapshot(SourceSnapshot source) {
+        SourceSnapshot copy = new SourceSnapshot();
+        copy.songId = source.songId;
+        copy.synced = source.synced;
+        copy.song = source.song;
+        copy.callback = source.callback;
+        for (Line line : source.lines) {
+            Line clone = new Line();
+            clone.text = line.text;
+            clone.ms = line.ms;
+            copy.lines.add(clone);
+        }
+        return copy;
     }
 
     /** In-memory source captured from the rendered lyrics response, if current. */
@@ -1148,9 +1649,15 @@ public final class LrclibFallback {
         }
     }
 
-    /** Adopts a cache-derived source without re-triggering auto-translation. */
-    private static void adoptSourceSnapshot(SourceSnapshot snapshot) {
+    /**
+     * Adopts a cache-derived source without re-triggering auto-translation.
+     * A snapshot belonging to a song with a translation in flight is never
+     * replaced: that request's lines are the ones it will render against.
+     */
+    private static boolean adoptSourceSnapshot(SourceSnapshot snapshot) {
+        if (snapshot == null) return false;
         synchronized (LrclibFallback.class) {
+            if (inFlightSnapshots.containsKey(snapshot.songId)) return false;
             translationSongId = snapshot.songId;
             translationSong = snapshot.song;
             translationCallback = snapshot.callback;
@@ -1162,6 +1669,7 @@ public final class LrclibFallback {
                 copy.ms = source.ms;
                 translationSourceLines.add(copy);
             }
+            return true;
         }
     }
 
@@ -1424,6 +1932,11 @@ public final class LrclibFallback {
             if (fr) return "Chercher sur LRCLIB";
             return "Search LRCLIB";
         }
+        if ("search_all_sources".equals(key)) {
+            if (ar) return "البحث في كل المصادر";
+            if (fr) return "Rechercher dans toutes les sources";
+            return "Search lyrics";
+        }
         if ("dialog_title".equals(key)) {
             if (ar) return "مصدر الكلمات";
             if (fr) return "Source des paroles";
@@ -1458,6 +1971,11 @@ public final class LrclibFallback {
             if (ar) return "لا نتائج في LRCLIB";
             if (fr) return "Aucun résultat LRCLIB";
             return "No LRCLIB results";
+        }
+        if ("no_results_any".equals(key)) {
+            if (ar) return "لا نتائج في المصادر المحددة";
+            if (fr) return "Aucun résultat dans les sources sélectionnées";
+            return "No results from the selected sources";
         }
         if ("empty_record".equals(key)) {
             if (ar) return "تسجيلة فارغة، اختر غيرها";
@@ -1759,7 +2277,7 @@ public final class LrclibFallback {
 
     // ================= cache =================
 
-    private static final class Cached {
+    static final class Cached {
         boolean miss;
         long ts;
         String plain;
@@ -1934,11 +2452,22 @@ public final class LrclibFallback {
 
     // ================= LRCLIB waterfall =================
 
-    private static final class Result {
+    static final class Result {
         String plain;
         String synced;
         String queryUsed = "";
         String source = "";
+    }
+
+    /** Test-only factory for a per-source result (no network involved). */
+    static Result resultForTest(String plain, String synced, String queryUsed,
+                                String source) {
+        Result r = new Result();
+        r.plain = plain;
+        r.synced = synced;
+        r.queryUsed = queryUsed;
+        r.source = source;
+        return r;
     }
 
     /** IDs used by the options dialog, in the order they are offered. */
@@ -1978,6 +2507,23 @@ public final class LrclibFallback {
 
     static void resetWaterfallCountForTest() {
         waterfallEntriesForTest = 0;
+    }
+
+    /** Clears the in-memory fill/translation state between unit tests. */
+    static void resetFillStateForTest() {
+        synchronized (LrclibFallback.class) {
+            fillInFlight.clear();
+            missRetryTimes.clear();
+            nativeFullRenderTimes.clear();
+            lastRenderedSongKey = "";
+            lastRenderedRealLyrics = false;
+            translationSongId = "";
+            translationSong = null;
+            translationCallback = null;
+            translationSourceLines.clear();
+            inFlightSnapshots.clear();
+            translationRequestsInFlight.clear();
+        }
     }
 
     static int waterfallCountForTest() {
@@ -2483,6 +3029,103 @@ public final class LrclibFallback {
         return t + " — " + a + dur;
     }
 
+    // ============ source-agnostic candidate picker ============
+
+    /** One picker row. LRCLIB rows re-fetch by id; other sources carry lyrics. */
+    static final class Candidate {
+        final String label;
+        final String source;
+        final long lrclibId;
+        final Result result;
+
+        Candidate(String label, String source, long lrclibId, Result result) {
+            this.label = label;
+            this.source = source;
+            this.lrclibId = lrclibId;
+            this.result = result;
+        }
+    }
+
+    /**
+     * Network seam for candidate collection. Production delegates to the same
+     * searchCandidates/fromSource helpers the old LRCLIB-only path used; tests
+     * inject canned results to assert ordering and source skipping.
+     */
+    interface CandidateSearch {
+        List<JSONObject> lrclibCandidates(SongInfo song);
+
+        Result sourceResult(SongInfo song, String source);
+    }
+
+    private static final CandidateSearch PRODUCTION_CANDIDATE_SEARCH =
+            new CandidateSearch() {
+                @Override
+                public List<JSONObject> lrclibCandidates(SongInfo song) {
+                    return searchCandidates(normalize(song.title, true),
+                            normalize(song.artist, true));
+                }
+
+                @Override
+                public Result sourceResult(SongInfo song, String source) {
+                    return fromSource(song, source);
+                }
+            };
+
+    // Test-only log of sources actually queried by collectCandidates.
+    static final List<String> candidateQueriesForTest = new ArrayList<String>();
+
+    static void resetCandidateQueryLogForTest() {
+        candidateQueriesForTest.clear();
+    }
+
+    static List<String> candidateQueriesForTest() {
+        return Collections.unmodifiableList(candidateQueriesForTest);
+    }
+
+    /**
+     * Collects candidates from the saved lyric_sources selection, in the
+     * configured order. A source that fails or is unreachable contributes no
+     * rows and never aborts the remaining sources.
+     */
+    static List<Candidate> collectCandidates(SongInfo song, SharedPreferences p,
+                                             CandidateSearch search) {
+        List<Candidate> out = new ArrayList<Candidate>();
+        if (song == null || search == null) return out;
+        boolean[] selected = p == null ? parseSelectedSources(null) : loadSelectedSources(p);
+        Set<String> seenIds = new HashSet<String>();
+        for (int i = 0; i < LYRIC_SOURCE_IDS.length && i < selected.length; i++) {
+            if (!selected[i]) continue;
+            String id = LYRIC_SOURCE_IDS[i];
+            candidateQueriesForTest.add(id);
+            if ("lrclib".equals(id)) {
+                List<JSONObject> found = search.lrclibCandidates(song);
+                if (found == null) continue;
+                for (JSONObject o : found) {
+                    if (o == null) continue;
+                    long recordId = o.optLong("id", -1);
+                    String dedupe = recordId >= 0 ? "id:" + recordId
+                            : "row:" + sourceLabel(id) + ":" + out.size();
+                    if (!seenIds.add(dedupe)) continue;
+                    out.add(new Candidate(candidateLabel(o) + " (" + sourceLabel(id) + ")",
+                            id, recordId, null));
+                }
+            } else {
+                Result r = search.sourceResult(song, id);
+                if (r == null) continue;
+                JSONObject meta = new JSONObject();
+                try {
+                    meta.put("trackName", song.title);
+                    meta.put("artistName", song.artist);
+                    if (song.hasDuration) meta.put("duration", song.duration);
+                } catch (Exception ignored) {
+                }
+                out.add(new Candidate(candidateLabel(meta) + " (" + sourceLabel(id) + ")",
+                        id, -1, r));
+            }
+        }
+        return out;
+    }
+
     // ================= LRC -> LyricsLine =================
 
     private static final Pattern LRC_TAG =
@@ -2612,6 +3255,16 @@ public final class LrclibFallback {
                 return;
             }
             renderedKeys.put(renderCallback, key);
+            // Track what is actually on screen so the proactive fill leaves
+            // real lyrics alone but retries when only a placeholder/teaser
+            // was rendered (the bug the fill feature fixes).
+            try {
+                lastRenderedSongKey = songKey(readSong(songObj));
+                lastRenderedRealLyrics = isTranslationSourceResult(queryUsed)
+                        && ((plain != null && !plain.trim().isEmpty())
+                        || (synced != null && !synced.trim().isEmpty()));
+            } catch (Throwable ignored) {
+            }
         }
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
@@ -2826,7 +3479,7 @@ public final class LrclibFallback {
         clearBtn.setText(tr("clear_cache"));
         layout.addView(clearBtn);
         final android.widget.Button searchBtn = new android.widget.Button(ctx);
-        searchBtn.setText(tr("search"));
+        searchBtn.setText(tr("search_all_sources"));
         layout.addView(searchBtn);
         final android.widget.Button sourcesBtn = new android.widget.Button(ctx);
         sourcesBtn.setText(tr("lyrics_sources"));
@@ -2871,29 +3524,45 @@ public final class LrclibFallback {
                 if (a.isEmpty() && t.isEmpty()) return;
                 dialog.dismiss();
                 final Context c = v.getContext();
+                SongInfo searchSong = new SongInfo();
+                searchSong.artist = a;
+                searchSong.title = t;
+                final SongInfo query = searchSong;
+                // Replace the native loading spinner immediately with our own
+                // status line; the picker (or a miss message) follows.
+                renderSearchStatus(song, callback, tr("searching"));
                 new Thread(new Runnable() {
                     @Override
                     public void run() {
-                        final List<JSONObject> found =
-                                searchCandidates(normalize(t, true), normalize(a, true));
+                        final List<Candidate> found = collectCandidates(
+                                query, prefs(c), PRODUCTION_CANDIDATE_SEARCH);
                         new Handler(Looper.getMainLooper()).post(new Runnable() {
                             @Override
                             public void run() {
                                 if (found.isEmpty()) {
-                                    Toast.makeText(c, tr("no_results"),
+                                    // Never leave the native spinner running.
+                                    renderSearchStatus(song, callback, tr("no_results_any"));
+                                    Toast.makeText(c, tr("no_results_any"),
                                             Toast.LENGTH_SHORT).show();
                                     return;
                                 }
                                 final String[] labels = new String[found.size()];
                                 for (int i = 0; i < found.size(); i++) {
-                                    labels[i] = candidateLabel(found.get(i));
+                                    labels[i] = found.get(i).label;
                                 }
                                 new AlertDialog.Builder(c)
                                         .setTitle(tr("pick"))
                                         .setItems(labels, new android.content.DialogInterface.OnClickListener() {
                                             @Override
                                             public void onClick(android.content.DialogInterface d, int which) {
-                                                final long id = found.get(which).optLong("id", -1);
+                                                final Candidate picked = found.get(which);
+                                                // Non-LRCLIB sources already hold their lyrics;
+                                                // apply them without a second network call.
+                                                if (picked.result != null) {
+                                                    applyPickedLyrics(c, song, callback, picked.result);
+                                                    return;
+                                                }
+                                                final long id = picked.lrclibId;
                                                 if (id < 0) return;
                                                 new Thread(new Runnable() {
                                                     @Override
@@ -2903,23 +3572,18 @@ public final class LrclibFallback {
                                                             new Handler(Looper.getMainLooper()).post(new Runnable() {
                                                                 @Override
                                                                 public void run() {
+                                                                    renderSearchStatus(song, callback,
+                                                                            tr("no_results_any"));
                                                                     Toast.makeText(c, tr("empty_record"),
                                                                             Toast.LENGTH_SHORT).show();
                                                                 }
                                                             });
                                                             return;
                                                         }
-                                                        // The user's pick wins and sticks:
-                                                        // cached, so future opens load it directly.
-                                                        try {
-                                                            writePositiveCache(c, cacheKey(readSong(song)), r);
-                                                        } catch (Exception ignored) {
-                                                        }
-                                                        remember(r.queryUsed, r.source, r.plain, r.synced);
-                                                        renderOnMain(c.getApplicationContext() != null
-                                                                ? c.getApplicationContext() : c,
-                                                                song, callback, r.plain, r.synced,
-                                                                r.queryUsed, true);
+                                                        // applyPickedLyrics caches the pick, seeds
+                                                        // translation state and renders through the
+                                                        // same path as every other lyrics source.
+                                                        applyPickedLyrics(c, song, callback, r);
                                                     }
                                                 }).start();
                                             }
@@ -4050,8 +4714,7 @@ public final class LrclibFallback {
                 public void run() {
                     TranslationSettings current = readTranslationSettings(ctx);
                     SourceSnapshot latest = translationSourceFor(ctx, song);
-                    if (latest == null || !latest.songId.equals(snapshot.songId)
-                            || !sameSourceLines(latest.lines, snapshot.lines)) return;
+                    if (!sourceMatchesForResult(latest, snapshot)) return;
                     if (!sameTranslationSettings(settings, current)) {
                         if (!autoTranslateIfEnabled(ctx, song)) {
                             renderOriginalLyricsIfCurrent(song, snapshot);
@@ -4111,8 +4774,10 @@ public final class LrclibFallback {
             return;
         }
         final String requestKey = cacheKey + "|" + snapshot.songId;
+        final SourceSnapshot requestSnapshot = copySnapshot(snapshot);
         synchronized (LrclibFallback.class) {
             if (!translationRequestsInFlight.add(requestKey)) return;
+            inFlightSnapshots.put(snapshot.songId, requestSnapshot);
         }
         final ProgressDialog progress;
         try {
@@ -4127,6 +4792,7 @@ public final class LrclibFallback {
         } catch (Throwable t) {
             synchronized (LrclibFallback.class) {
                 translationRequestsInFlight.remove(requestKey);
+                inFlightSnapshots.remove(snapshot.songId);
             }
             Log.d(TAG, "could not show translation progress: " + t);
             if (!interactive) renderOriginalLyricsIfCurrent(song, snapshot);
@@ -4200,8 +4866,7 @@ public final class LrclibFallback {
                         try {
                             TranslationSettings selected = readTranslationSettings(ctx);
                             SourceSnapshot current = translationSourceFor(song);
-                            if (current == null || !current.songId.equals(snapshot.songId)
-                                    || !sameSourceLines(current.lines, snapshot.lines)) {
+                            if (!sourceMatchesForResult(current, snapshot)) {
                                 if (interactive) {
                                     Toast.makeText(ctx, tr("source_changed"),
                                             Toast.LENGTH_SHORT).show();
@@ -4253,6 +4918,7 @@ public final class LrclibFallback {
                         } finally {
                             synchronized (LrclibFallback.class) {
                                 translationRequestsInFlight.remove(requestKey);
+                                inFlightSnapshots.remove(snapshot.songId);
                             }
                         }
                     }
@@ -4261,7 +4927,7 @@ public final class LrclibFallback {
         }).start();
     }
 
-    private static boolean sameSourceLines(List<Line> a, List<Line> b) {
+    static boolean sameSourceLines(List<Line> a, List<Line> b) {
         if (a == null || b == null || a.size() != b.size()) return false;
         for (int i = 0; i < a.size(); i++) {
             Line left = a.get(i);
@@ -4271,6 +4937,29 @@ public final class LrclibFallback {
             }
         }
         return true;
+    }
+
+    /**
+     * Semantic equality for the result guard: only the song and the visible
+     * text sequence matter. Cache-derived lines and live-rendered lines can
+     * carry different timestamps (or provenance) for the same lyrics, and
+     * that must not be reported as "source changed".
+     */
+    static boolean sameSourceText(List<Line> a, List<Line> b) {
+        if (a == null || b == null || a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            String left = String.valueOf(a.get(i).text);
+            String right = String.valueOf(b.get(i).text);
+            if (!left.equals(right)) return false;
+        }
+        return true;
+    }
+
+    /** Result-handler guard: same song + same visible text is not a change. */
+    static boolean sourceMatchesForResult(SourceSnapshot current, SourceSnapshot request) {
+        if (current == null || request == null) return false;
+        return String.valueOf(current.songId).equals(String.valueOf(request.songId))
+                && sameSourceText(current.lines, request.lines);
     }
 
     private static String translationCacheKey(SourceSnapshot source, String model,
@@ -5175,8 +5864,7 @@ public final class LrclibFallback {
     private static void renderOriginalLyricsIfCurrent(Object song, SourceSnapshot expected) {
         if (song == null || expected == null) return;
         SourceSnapshot current = translationSourceFor(song);
-        if (current == null || !current.songId.equals(expected.songId)
-                || !sameSourceLines(current.lines, expected.lines)) return;
+        if (!sourceMatchesForResult(current, expected)) return;
         List<String> noTranslations = new ArrayList<String>();
         for (int i = 0; i < current.lines.size(); i++) noTranslations.add("");
         renderDualLines(song, current.callback, current, noTranslations);

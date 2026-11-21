@@ -84,6 +84,22 @@ preference: it is shown as-is for every song and only changes when you change a
 checkbox. The result is shown immediately and sent for translation when
 automatic translation is enabled.
 
+If the player is already on the **Lyrics** tab but the screen is empty (or only
+shows a teaser/loading placeholder), the fallback fills it proactively on
+resume and when you switch into Lyrics mode: it renders from the local cache
+when available, otherwise it searches only the selected sources and pushes the
+first match into the player. A positive cache is reused directly; a "no lyrics"
+result is retried only after a cooldown, and one search per song runs at a time,
+so revisiting a lyrics-less song never hammers the providers.
+
+A search starts by replacing the native loading spinner with an immediate
+status line, and always finishes with either the lyrics or a clear
+"no results" message, so the spinner cannot be left behind. Manual search in
+the Lyrics options dialog (**Search lyrics**) also covers every selected source
+in the saved order, shows which source each candidate came from, and skips
+sources that fail. Picking a candidate still caches it, seeds translation state
+and renders it through the standard path.
+
 ### AI lyrics translation via OpenRouter, OpenCode, or xKiro
 
 Enable **AI lyrics translation · OpenRouter / OpenCode / xKiro** in Morphe. It pulls in
@@ -168,6 +184,11 @@ read from the same local `lyrics_fallback` cache the lyrics view uses, so transl
 song never fetches its lyrics from LRCLIB / LyricsPlus / Better Lyrics again. If there is
 no usable cached entry, translation simply has no source (the original behavior); it does
 not trigger a new lyrics search on its own.
+
+Revisiting a song cannot produce a false "Lyrics changed during translation" message:
+the result check compares only the song and the visible line text (timestamps and
+cache-vs-live provenance are ignored), and the snapshot a request started with stays
+authoritative until that request finishes.
 
 ### 🛠️ Building locally
 
