@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-20T16:21:41",
-  "description": "## [1.17.3](https://github.com/0xgalal/anghami-patches/compare/v1.17.2...v1.17.3) (2026-11-20)\n\n### 🐛 Bug Fixes\n\n* translate full Cloudflare lyrics and add Translate now button ([e18a309](https://github.com/0xgalal/anghami-patches/commit/e18a309662c457ccb9914803f98f57501787d3d0))",
-  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.3/patches-1.17.3.mpp",
+  "created_at": "2026-11-21T01:28:02",
+  "description": "## [1.17.4](https://github.com/0xgalal/anghami-patches/compare/v1.17.3...v1.17.4) (2026-11-21)\n\n### 🐛 Bug Fixes\n\n* translate from cached lyrics without refetching from lyrics sites ([740974d](https://github.com/0xgalal/anghami-patches/commit/740974d0fddbcf8b22975962cc3a1e6fd4dcd142))",
+  "download_url": "https://github.com/0xgalal/anghami-patches/releases/download/v1.17.4/patches-1.17.4.mpp",
   "signature_download_url": "",
-  "version": "1.17.3"
+  "version": "1.17.4"
 }

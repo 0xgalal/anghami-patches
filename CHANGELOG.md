@@ -1,3 +1,9 @@
+## [1.17.4](https://github.com/0xgalal/anghami-patches/compare/v1.17.3...v1.17.4) (2026-11-21)
+
+### 🐛 Bug Fixes
+
+* translate from cached lyrics without refetching from lyrics sites ([740974d](https://github.com/0xgalal/anghami-patches/commit/740974d0fddbcf8b22975962cc3a1e6fd4dcd142))
+
 ## [1.17.3](https://github.com/0xgalal/anghami-patches/compare/v1.17.2...v1.17.3) (2026-11-20)
 
 ### 🐛 Bug Fixes
