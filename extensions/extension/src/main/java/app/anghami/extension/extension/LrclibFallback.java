@@ -209,6 +209,18 @@ public final class LrclibFallback {
     private static String lastRenderedSongKey = "";
     private static boolean lastRenderedRealLyrics;
 
+    // A manual pick is authoritative: it must win over any autofill render that
+    // is still queued for the same song. A pick advances a per-song epoch; a
+    // queued render/re-assert carries the epoch it was scheduled with and
+    // becomes a no-op once the pick changed the epoch.
+    private static final Map<String, Long> renderEpochs =
+            new java.util.HashMap<String, Long>();
+    // Epoch captured when a background fill search starts. If a manual pick
+    // advances the epoch before the result lands, that result is stale and is
+    // not allowed to overwrite the pick.
+    private static final Map<String, Long> fillSearchStartEpochs =
+            new java.util.HashMap<String, Long>();
+
     // Bounded retry for the case where onResume/mode-observer fires before the
     // player's lyrics view is laid out. Keyed by song so a quick song switch
     // cannot leave a stale retry queued for the wrong track.
@@ -798,15 +810,30 @@ public final class LrclibFallback {
         return ((ViewGroup) list).getChildCount();
     }
 
+    /**
+     * A lyrics View (com.anghami.ui.view.A) is bound to one Song through its
+     * final `c` field (verified in 8.0.28). During song navigation a detached
+     * view for the previous song can still be in the player hierarchy; its
+     * lines are NOT on screen for the current track. Only trust a view whose
+     * song matches — otherwise the raw state is discarded so the fill can
+     * proceed instead of being suppressed by a stale "has lyrics" reading.
+     * Package-private so the decision is testable without a live view.
+     */
+    static LyricsViewState viewStateForSong(LyricsViewState raw, boolean songMatches) {
+        return songMatches ? raw : LyricsViewState.UNKNOWN;
+    }
+
     /** Best-effort state of the live lyrics view for the proactive fill. */
-    private static LyricsViewState lyricsViewState(Object fragmentObj) {
+    private static LyricsViewState lyricsViewState(Object fragmentObj, Object songObj) {
         try {
             View root = fragmentRootView(fragmentObj);
             if (root == null) return LyricsViewState.UNKNOWN;
             Object lyricsView = findLyricsView(root);
             if (lyricsView != null) {
-                LyricsViewState state = lyricsViewStateForCallback(lyricsView);
-                if (state != LyricsViewState.UNKNOWN) return state;
+                LyricsViewState raw = lyricsViewStateForCallback(lyricsView);
+                if (raw != LyricsViewState.UNKNOWN) {
+                    return viewStateForSong(raw, viewMatchesSong(lyricsView, songObj));
+                }
             }
             View list = findLyricsList(root);
             if (list == null) return LyricsViewState.UNKNOWN;
@@ -817,11 +844,26 @@ public final class LrclibFallback {
         }
     }
 
+    /** True when a lyrics view is bound to the current song (or cannot be checked). */
+    private static boolean viewMatchesSong(Object lyricsView, Object songObj) {
+        try {
+            if (songObj == null) return true; // no identity to compare: keep old behavior
+            Object viewSong = getFieldUp(lyricsView, "c");
+            if (viewSong == null) return true; // field absent on this build: keep old behavior
+            SongInfo fromView = readSong(viewSong);
+            SongInfo current = readSong(songObj);
+            if (fromView == null || current == null) return true;
+            return songKey(fromView).equals(songKey(current));
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
     /** Bounded main-thread retry when the mode is active but the view is not ready. */
-    private static void scheduleFillRetry(final Object fragmentObj,
+    private static void scheduleFillRetry(final Object fragmentObj, final Object songObj,
                                           final String queueKey, final int attempt) {
         if (!shouldScheduleFillRetry(
-                lyricsViewState(fragmentObj), true, attempt)) return;
+                lyricsViewState(fragmentObj, songObj), true, attempt)) return;
         synchronized (LrclibFallback.class) {
             Long last = fillRetryTimes.get(queueKey);
             long now = System.currentTimeMillis();
@@ -860,7 +902,7 @@ public final class LrclibFallback {
             }
             String queueKey = songKey(song);
             if (ctx == null) {
-                scheduleFillRetry(fragmentObj, queueKey, attempt);
+                scheduleFillRetry(fragmentObj, songObj, queueKey, attempt);
                 return;
             }
             // Refresh the song-bound callback so a view recreated since the
@@ -868,10 +910,10 @@ public final class LrclibFallback {
             // callbackForSong again at paint time.
             if (callback != null) rememberLyricsTarget(songObj, callback);
 
-            LyricsViewState viewState = lyricsViewState(fragmentObj);
+            LyricsViewState viewState = lyricsViewState(fragmentObj, songObj);
             if (shouldScheduleFillRetry(viewState, true, attempt)
                     && viewState == LyricsViewState.UNKNOWN) {
-                scheduleFillRetry(fragmentObj, queueKey, attempt);
+                scheduleFillRetry(fragmentObj, songObj, queueKey, attempt);
                 // Still proceed on the marks so the fill is not lost when the
                 // view simply cannot be inspected on this device.
             }
@@ -1084,12 +1126,17 @@ public final class LrclibFallback {
      * host app.
      */
     private static void clearNativeLoading(final Object songObj, final Object callback) {
+        final String songId = songIdOf(songObj);
+        final long capturedEpoch = renderEpoch(songId);
         Runnable clear = new Runnable() {
             @Override
             public void run() {
                 try {
-                    Object latest = callbackForSong(songObj);
-                    if (latest == null) latest = callback;
+                    // This paints an empty success state. If a manual pick
+                    // committed since it was queued, painting now would blank
+                    // the picked lyrics — skip instead.
+                    if (!isReassertCurrent(songId, capturedEpoch)) return;
+                    Object latest = paintCallback(songObj, callback);
                     if (latest == null) return;
                     Object response = buildResponse(songObj, "", null);
                     if (response == null) return;
@@ -1109,15 +1156,115 @@ public final class LrclibFallback {
         }
     }
 
-    /** Same key renderOnMain uses for dedupe; shared with the settle guards. */
-    private static String renderKey(Object songObj, String plain, String synced) {
+    /**
+     * Dedupe key for a render. The song identity is normalized (stable id, or
+     * artist|title when the build exposes no id) so two objects for the same
+     * track share a key while two different tracks can never collide. A
+     * manual pick may carry a different Song instance than the autofill path;
+     * keying on the normalized identity — not the raw `id` field of whichever
+     * object was passed in — keeps the dedupe honest across song navigation.
+     * Package-private so tests can verify the song identity is part of it.
+     */
+    static String renderKey(Object songObj, String plain, String synced) {
         try {
-            Object id = getFieldUp(songObj, "id");
-            return String.valueOf(id) + "|" + (plain == null ? 0 : plain.hashCode())
+            SongInfo song = readSong(songObj);
+            if (song == null) return null;
+            return songKey(song) + "|" + (plain == null ? 0 : plain.hashCode())
                     + "|" + (synced == null ? 0 : synced.hashCode())
                     + "|" + lastPreferSynced;
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    /** True only when an identical render should be skipped (never when forced). */
+    static boolean shouldSkipDuplicateRender(boolean force, String key, String storedKey) {
+        return !force && key != null && key.equals(storedKey);
+    }
+
+    /** Epoch of the newest committed render for a song id (0 when none). */
+    static long renderEpoch(String songId) {
+        if (songId == null) return 0L;
+        synchronized (LrclibFallback.class) {
+            Long epoch = renderEpochs.get(songId);
+            return epoch == null ? 0L : epoch.longValue();
+        }
+    }
+
+    /** Advance a song's render epoch. Package-private for deterministic tests. */
+    static long advanceRenderEpoch(Object songObj) {
+        String id = songIdOf(songObj);
+        if (id == null) return -1L;
+        synchronized (LrclibFallback.class) {
+            Long epoch = renderEpochs.get(id);
+            long next = (epoch == null ? 0L : epoch.longValue()) + 1L;
+            renderEpochs.put(id, Long.valueOf(next));
+            return next;
+        }
+    }
+
+    /** Invalidates pending re-asserts so a manual pick cannot be overwritten. */
+    static void cancelPendingReasserts(Object songObj) {
+        advanceRenderEpoch(songObj);
+    }
+
+    /** True when a re-assert scheduled with {@code capturedEpoch} is still valid. */
+    static boolean isReassertCurrent(String songId, long capturedEpoch) {
+        return renderEpoch(songId) == capturedEpoch;
+    }
+
+    /**
+     * True when a background fill result is stale: a manual pick committed
+     * after this search started. Package-private for deterministic tests.
+     */
+    static boolean shouldSkipLateFillResult(String songId) {
+        if (songId == null) return false;
+        synchronized (LrclibFallback.class) {
+            Long startedAt = fillSearchStartEpochs.get(songId);
+            return startedAt != null && !isReassertCurrent(songId, startedAt.longValue());
+        }
+    }
+
+    /** Normalized identity of a song object, or null when it cannot be read. */
+    private static String songIdOf(Object songObj) {
+        try {
+            SongInfo song = readSong(songObj);
+            return song == null ? null : songKey(song);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Drops the dedupe marks of every live callback bound to this song. */
+    static void clearRenderKeysForSong(Object songObj) {
+        try {
+            final String wanted = songIdOf(songObj);
+            if (wanted == null) return;
+            final Object resolved = callbackForSong(songObj);
+            synchronized (LrclibFallback.class) {
+                java.util.Iterator<Map.Entry<Object, String>> it =
+                        renderedKeys.entrySet().iterator();
+                while (it.hasNext()) {
+                    Map.Entry<Object, String> entry = it.next();
+                    if (entry.getKey() == resolved || belongsToSong(entry.getKey(), wanted)) {
+                        it.remove();
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** True when a callback (a lyrics View) is bound to the given song id. */
+    private static boolean belongsToSong(Object callback, String wantedId) {
+        if (!(callback instanceof View)) return false;
+        try {
+            Object viewSong = getFieldUp(callback, "c");
+            if (viewSong == null) return false;
+            SongInfo fromView = readSong(viewSong);
+            return fromView != null && wantedId.equals(songKey(fromView));
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 
@@ -1136,12 +1283,19 @@ public final class LrclibFallback {
     private static void settleRenderOnMain(final Object songObj, final Object callback,
                                            final String plain, final String synced) {
         final String key = renderKey(songObj, plain, synced);
+        final String songId = songIdOf(songObj);
+        if (songId == null) return;
+        // Captured now, before any frame is queued. A manual pick advances the
+        // epoch, and every pending re-assert below then becomes a no-op instead
+        // of painting stale/empty text over the pick.
+        final long capturedEpoch = renderEpoch(songId);
         for (final int delay : settleRenderDelaysMs()) {
             try {
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                     @Override
                     public void run() {
                         try {
+                            if (!isReassertCurrent(songId, capturedEpoch)) return;
                             Object latest = callbackForSong(songObj);
                             if (latest == null) latest = callback;
                             if (latest == null) return;
@@ -1188,6 +1342,10 @@ public final class LrclibFallback {
     static void commitCachedResult(Context ctx, Object songObj, Object callback,
                                    Cached hit, LyricsRenderSink sink) {
         if (hit == null || sink == null) return;
+        if (shouldSkipLateFillResult(songIdOf(songObj))) {
+            Log.d(TAG, "cached fill result skipped: manual pick took precedence");
+            return;
+        }
         remember(hit.queryUsed, hit.source, hit.plain, hit.synced);
         try {
             SongInfo song = readSong(songObj);
@@ -1204,6 +1362,10 @@ public final class LrclibFallback {
     static void commitFoundResult(Context ctx, Object songObj, SongInfo song,
                                   Object callback, Result result, LyricsRenderSink sink) {
         if (songObj == null || result == null || sink == null) return;
+        if (shouldSkipLateFillResult(songIdOf(songObj))) {
+            Log.d(TAG, "fill search result skipped: manual pick took precedence");
+            return;
+        }
         writePositiveCache(ctx, cacheKey(song), result);
         remember(result.queryUsed, result.source, result.plain, result.synced);
         seedTranslationForResult(song, songObj, callback, result.plain, result.synced);
@@ -1250,6 +1412,10 @@ public final class LrclibFallback {
         final String key = cacheKey(song);
         synchronized (LrclibFallback.class) {
             if (!fillInFlight.add(queueKey)) return;
+            // Remember the epoch at search start; a manual pick that commits
+            // while the network call is in flight must not be overwritten by
+            // the result (or by its "no results" status line).
+            fillSearchStartEpochs.put(queueKey, Long.valueOf(renderEpoch(queueKey)));
         }
         final Context appCtx = ctx.getApplicationContext() != null
                 ? ctx.getApplicationContext() : ctx;
@@ -1280,17 +1446,28 @@ public final class LrclibFallback {
                         fillInFlight.remove(queueKey);
                     }
                 }
+                final boolean pickWon = shouldSkipLateFillResult(queueKey);
                 Object live = callbackForSong(songObj);
                 Object target = live != null ? live : callback;
                 if (result == null) {
-                    writeNegativeCache(appCtx, key);
-                    String message = status.miss(queueKey, tr("no_results_any"));
-                    if (message != null) renderSearchStatus(songObj, target, message);
+                    if (!pickWon) {
+                        writeNegativeCache(appCtx, key);
+                        String message = status.miss(queueKey, tr("no_results_any"));
+                        if (message != null) renderSearchStatus(songObj, target, message);
+                    }
+                    synchronized (LrclibFallback.class) {
+                        fillSearchStartEpochs.remove(queueKey);
+                    }
                     Log.d(TAG, "proactive fill: no match for " + song.id);
                     return;
                 }
                 status.success(queueKey, result.plain != null ? result.plain : result.synced);
-                commitFoundResult(appCtx, songObj, song, target, result, PRODUCTION_RENDER_SINK);
+                if (!pickWon) {
+                    commitFoundResult(appCtx, songObj, song, target, result, PRODUCTION_RENDER_SINK);
+                }
+                synchronized (LrclibFallback.class) {
+                    fillSearchStartEpochs.remove(queueKey);
+                }
             }
         }).start();
     }
@@ -1427,6 +1604,8 @@ public final class LrclibFallback {
     private static void retryMissInBackground(final Context ctx, final Object songObj,
                                               final SongInfo song, final Object callback,
                                               final String key) {
+        final String songId = songIdOf(songObj);
+        final long startEpoch = renderEpoch(songId);
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -1442,6 +1621,9 @@ public final class LrclibFallback {
                     return;
                 }
                 if (r == null) return;
+                // A manual pick that landed during this background retry owns
+                // the screen now; do not paint a late cache-derived result.
+                if (songId != null && !isReassertCurrent(songId, startEpoch)) return;
                 writePositiveCache(ctx, key, r);
                 remember(r.queryUsed, r.source, r.plain, r.synced);
                 // renderOnMain resolves the live callback and starts automatic
@@ -2183,7 +2365,18 @@ public final class LrclibFallback {
         return translateNowSource(p, target);
     }
 
-    private static Object callbackForSong(Object songObj) {
+    /**
+     * Callback to actually paint into at render time: the freshest one bound
+     * to this song, or the captured fallback. Both scheduling and painting
+     * re-resolve through here so a view recreated in between still receives
+     * the lyrics. Package-private for tests.
+     */
+    static Object paintCallback(Object songObj, Object fallback) {
+        Object live = callbackForSong(songObj);
+        return live != null ? live : fallback;
+    }
+
+    static Object callbackForSong(Object songObj) {
         try {
             if (songObj == null) return null;
             SongInfo song = readSong(songObj);
@@ -2963,6 +3156,12 @@ public final class LrclibFallback {
             translationSourceLines.clear();
             inFlightSnapshots.clear();
             translationRequestsInFlight.clear();
+            renderEpochs.clear();
+            fillSearchStartEpochs.clear();
+            renderedKeys.clear();
+            lastSong = null;
+            lastCallback = null;
+            lyricsCallbacks.clear();
         }
     }
 
@@ -3647,16 +3846,20 @@ public final class LrclibFallback {
             writePositiveCache(appCtx, cacheKey(readSong(song)), picked);
             remember(picked.queryUsed, picked.source, picked.plain, picked.synced);
 
+            // A pick is authoritative. Cancel any autofill re-assert still
+            // queued for this song and drop every dedupe mark bound to it,
+            // then force the render so an identical earlier text cannot make
+            // renderOnMain early-return "duplicate render skipped".
+            cancelPendingReasserts(song);
+            clearRenderKeysForSong(song);
+
             Object latest = callbackForSong(song);
             if (latest == null) latest = callback;
-            synchronized (LrclibFallback.class) {
-                renderedKeys.remove(latest);
-            }
             // renderOnMain builds the response the way the native renderer
-            // expects, resolves the live callback again and starts automatic
-            // translation for the picked source.
+            // expects, resolves the live callback again (also at paint time)
+            // and starts automatic translation for the picked source.
             renderOnMain(appCtx, song, latest, picked.plain, picked.synced,
-                    "picked:" + picked.source, true);
+                    "picked:" + picked.source, true, true);
             Log.d(TAG, "picked lyrics applied from " + picked.source);
         } catch (Throwable t) {
             Log.d(TAG, "could not apply picked lyrics: " + t);
@@ -3667,6 +3870,19 @@ public final class LrclibFallback {
                                      Object callbackObj, final String plain,
                                      final String synced, final String queryUsed,
                                      final boolean toast) {
+        renderOnMain(ctx, songObj, callbackObj, plain, synced, queryUsed, toast, false);
+    }
+
+    /**
+     * Paint fetched lyrics on the live view. {@code force} is used by a manual
+     * pick: it bypasses dedupe (so picking a result that matches earlier text
+     * still paints). The pick also advances the render epoch before this call,
+     * so queued autofill re-asserts cannot overwrite it afterwards.
+     */
+    private static void renderOnMain(final Context ctx, final Object songObj,
+                                     Object callbackObj, final String plain,
+                                     final String synced, final String queryUsed,
+                                     final boolean toast, final boolean force) {
         // A lookup can finish seconds after the lyrics view was recreated
         // (switching songs and coming back). Rendering into the callback that
         // was captured when the request started then updates a dead view:
@@ -3677,13 +3893,17 @@ public final class LrclibFallback {
         if (currentCallback != null) callbackObj = currentCallback;
         final Object renderCallback = callbackObj;
         if (renderCallback == null) return;
+        // Even if a caller forgets the flag, a manual pick is always forced.
+        final boolean mustForce = force || isManualPick(queryUsed);
 
         // Idempotence: repeated API callbacks for the same song must not
-        // re-render (and scroll-jump) an already-shown identical result.
+        // re-render (and scroll-jump) an already-shown identical result. A
+        // forced render (manual pick) always wins.
         final String key = renderKey(songObj, plain, synced);
         if (key == null) return;
         synchronized (LrclibFallback.class) {
-            if (key.equals(renderedKeys.get(renderCallback))) {
+            String stored = renderedKeys.get(renderCallback);
+            if (shouldSkipDuplicateRender(mustForce, key, stored)) {
                 Log.d(TAG, "duplicate render skipped (" + queryUsed + ")");
                 return;
             }
@@ -3699,6 +3919,11 @@ public final class LrclibFallback {
             } catch (Throwable ignored) {
             }
         }
+        // Captured before the frame is queued. Only a manual pick advances the
+        // epoch, so a stale autofill frame that was already queued becomes a
+        // no-op once the pick commits — without cancelling our own cleanup.
+        final long committedEpoch = renderEpoch(songIdOf(songObj));
+        final String songId = songIdOf(songObj);
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
@@ -3706,6 +3931,16 @@ public final class LrclibFallback {
                     Object response = buildResponse(songObj, plain, synced);
                     if (response == null) return;
                     List<Object> lines = buildLines(response, plain, synced);
+                    // Re-resolve at paint time, not just at scheduling time:
+                    // the lyrics view can be recreated while this frame waits
+                    // on the main looper. Painting the old view looks exactly
+                    // like "nothing happened" after a manual pick.
+                    Object paintCallback = paintCallback(songObj, renderCallback);
+                    if (paintCallback != renderCallback) {
+                        synchronized (LrclibFallback.class) {
+                            renderedKeys.put(paintCallback, key);
+                        }
+                    }
                     // Always show fetched LRCLIB lyrics right away. A slow or
                     // failing AI provider must never leave the lyrics screen
                     // hanging on a pending message. Translation still runs in
@@ -3725,12 +3960,14 @@ public final class LrclibFallback {
                                 sourceSynced = !sourceLines.isEmpty();
                             }
                             setTranslationSource(
-                                    readSong(songObj), songObj, renderCallback,
+                                    readSong(songObj), songObj, paintCallback,
                                     sourceLines, sourceSynced);
                         }
                     } catch (Exception ignored) {
                     }
-                    invokeRender(renderCallback, songObj, lines, response);
+                    // A newer pick may have committed while this frame waited.
+                    if (songId != null && !isReassertCurrent(songId, committedEpoch)) return;
+                    invokeRender(paintCallback, songObj, lines, response);
                     Log.d(TAG, "fallback applied (" + queryUsed + ")");
                 } catch (Throwable t) {
                     Log.d(TAG, "render failed: " + t);
@@ -3747,6 +3984,11 @@ public final class LrclibFallback {
         return !"placeholder".equals(queryUsed)
                 && !"no-result".equals(queryUsed)
                 && !"teaser-guide".equals(queryUsed);
+    }
+
+    /** A manual pick is tagged "picked:source" and must always force-render. */
+    static boolean isManualPick(String queryUsed) {
+        return queryUsed != null && queryUsed.startsWith("picked:");
     }
 
     private static Object buildResponse(Object songObj, String plain, String synced) {
