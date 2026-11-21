@@ -712,10 +712,14 @@ public final class LrclibFallback {
 
     /** ID-primary lookup with legacy-key fallback (pre-id-key entries). */
     private static Cached lookupCache(Context ctx, SongInfo song, String key) {
-        Cached hit = readCache(ctx, key);
+        return lookupCache(prefs(ctx), song, key);
+    }
+
+    private static Cached lookupCache(SharedPreferences p, SongInfo song, String key) {
+        Cached hit = readCache(p, key);
         if (hit == null) {
             String legacy = legacyCacheKey(song);
-            if (!legacy.equals(key)) hit = readCache(ctx, legacy);
+            if (!legacy.equals(key)) hit = readCache(p, legacy);
         }
         return hit;
     }
@@ -1004,6 +1008,49 @@ public final class LrclibFallback {
     }
 
     private static SourceSnapshot translationSourceFor(Object songObj) {
+        return translationSourceFor(translationContext(songObj), songObj);
+    }
+
+    /**
+     * Source used by every translation entry point. A live source captured from
+     * the rendered lyrics response always wins (so an already-translating song
+     * is never translated twice). When no live source exists — for example a
+     * "Translate now" request before the lyrics view rendered, or after it was
+     * recreated — the already-cached lyrics are used instead. Reading the cache
+     * never searches the lyrics websites.
+     */
+    static SourceSnapshot translationSourceFor(Context ctx, Object songObj) {
+        return translationSourceFor(ctx == null ? null : prefs(ctx), songObj);
+    }
+
+    static SourceSnapshot translationSourceFor(SharedPreferences p, Object songObj) {
+        SourceSnapshot live = liveSourceSnapshot(songObj);
+        if (live != null) return live;
+        // If a live source for a *different* song is current, never swap in a
+        // cached source: the caller's "source changed" check must still fire.
+        try {
+            SongInfo song = readSong(songObj);
+            if (song != null) {
+                String wanted = songKey(song);
+                synchronized (LrclibFallback.class) {
+                    if (!translationSongId.isEmpty() && !translationSongId.equals(wanted)) {
+                        return null;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        SourceSnapshot cached = cachedSourceSnapshot(p, songObj);
+        if (cached == null || cached.callback == null) return null;
+        // Adopt the cached lines as the current source so the consistency
+        // checks inside translateAndRender / renderOriginalLyricsIfCurrent see
+        // the same text without another cache read or a new lyrics request.
+        adoptSourceSnapshot(cached);
+        return cached;
+    }
+
+    /** In-memory source captured from the rendered lyrics response, if current. */
+    private static SourceSnapshot liveSourceSnapshot(Object songObj) {
         try {
             if (songObj == null) return null;
             SongInfo song = readSong(songObj);
@@ -1027,8 +1074,90 @@ public final class LrclibFallback {
                 return snapshot;
             }
         } catch (Throwable t) {
-            Log.d(TAG, "translationSourceFor failed: " + t);
+            Log.d(TAG, "liveSourceSnapshot failed: " + t);
             return null;
+        }
+    }
+
+    /** Context of the live lyrics callback, used to read the fallback cache. */
+    private static Context translationContext(Object songObj) {
+        Context ctx = appContextOf(callbackForSong(songObj));
+        if (ctx != null) return ctx;
+        synchronized (LrclibFallback.class) {
+            ctx = appContextOf(translationCallback);
+            if (ctx != null) return ctx;
+            return appContextOf(lastCallback);
+        }
+    }
+
+    /**
+     * Builds a translation source from a positive, non-stale cached lyrics
+     * entry. No network call is made here — only the local SharedPreferences
+     * cache is consulted. Package-private so unit tests can verify the
+     * cache-to-snapshot conversion (including LRC timestamps and line count).
+     */
+    static SourceSnapshot cachedSourceSnapshot(Context ctx, Object songObj) {
+        return cachedSourceSnapshot(ctx == null ? null : prefs(ctx), songObj);
+    }
+
+    static SourceSnapshot cachedSourceSnapshot(SharedPreferences p, Object songObj) {
+        if (p == null || songObj == null) return null;
+        try {
+            SongInfo song = readSong(songObj);
+            if (song == null) return null;
+            Cached hit = lookupCache(p, song, cacheKey(song));
+            if (!hasUsableLyrics(hit)) return null;
+
+            boolean synced = hit.synced != null && !hit.synced.isEmpty()
+                    && (lastPreferSynced || hit.plain == null || hit.plain.isEmpty());
+            List<Line> lines;
+            if (synced) {
+                lines = parseLrc(hit.synced);
+                if (lines.isEmpty()) {
+                    synced = false;
+                    lines = plainLines(hit.plain);
+                }
+            } else {
+                lines = plainLines(hit.plain);
+                if (lines.isEmpty() && hit.synced != null && !hit.synced.isEmpty()) {
+                    lines = parseLrc(hit.synced);
+                    synced = !lines.isEmpty();
+                }
+            }
+            if (lines.isEmpty()) return null;
+
+            SourceSnapshot snapshot = new SourceSnapshot();
+            snapshot.songId = songKey(song);
+            snapshot.synced = synced;
+            snapshot.song = songObj;
+            snapshot.callback = callbackForSong(songObj);
+            for (Line source : lines) {
+                Line copy = new Line();
+                copy.text = source.text == null ? "" : source.text;
+                copy.ms = source.ms;
+                snapshot.lines.add(copy);
+            }
+            return snapshot;
+        } catch (Throwable t) {
+            Log.d(TAG, "cachedSourceSnapshot failed: " + t);
+            return null;
+        }
+    }
+
+    /** Adopts a cache-derived source without re-triggering auto-translation. */
+    private static void adoptSourceSnapshot(SourceSnapshot snapshot) {
+        synchronized (LrclibFallback.class) {
+            translationSongId = snapshot.songId;
+            translationSong = snapshot.song;
+            translationCallback = snapshot.callback;
+            translationSourceSynced = snapshot.synced;
+            translationSourceLines.clear();
+            for (Line source : snapshot.lines) {
+                Line copy = new Line();
+                copy.text = source.text == null ? "" : source.text;
+                copy.ms = source.ms;
+                translationSourceLines.add(copy);
+            }
         }
     }
 
@@ -1610,8 +1739,12 @@ public final class LrclibFallback {
     }
 
     private static Cached readCache(Context ctx, String key) {
+        return readCache(prefs(ctx), key);
+    }
+
+    private static Cached readCache(SharedPreferences p, String key) {
         try {
-            String raw = prefs(ctx).getString(key, null);
+            String raw = p.getString(key, null);
             if (raw == null) return null;
             JSONObject j = new JSONObject(raw);
             Cached c = new Cached();
@@ -1734,7 +1867,21 @@ public final class LrclibFallback {
         return waterfall(song, null);
     }
 
+    // Test-only instrumentation: counts entries into the lyrics-site search.
+    // Unit tests use it to assert that translating from cache triggers no
+    // LRCLIB / LyricsPlus / Better Lyrics request.
+    static int waterfallEntriesForTest;
+
+    static void resetWaterfallCountForTest() {
+        waterfallEntriesForTest = 0;
+    }
+
+    static int waterfallCountForTest() {
+        return waterfallEntriesForTest;
+    }
+
     private static Result waterfall(SongInfo song, SearchProgress progress) {
+        waterfallEntriesForTest++;
         if (progress != null) progress.update(tr("searching"));
         Result r = fromLrclib(song);
         if (r != null) return r;
@@ -2557,7 +2704,7 @@ public final class LrclibFallback {
                     && callback == lastCallback;
         } catch (Exception ignored) {
         }
-        final SourceSnapshot aiSource = translationSourceFor(song);
+        final SourceSnapshot aiSource = translationSourceFor(ctx, song);
 
         LinearLayout layout = new LinearLayout(ctx);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -3010,7 +3157,7 @@ public final class LrclibFallback {
                                                final boolean includeAutoToggle) {
         final boolean configOnly = song == null;
         final SourceSnapshot initialSource =
-                configOnly ? null : translationSourceFor(song);
+                configOnly ? null : translationSourceFor(ctx, song);
         if (!configOnly && initialSource == null) {
             Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
             return;
@@ -3293,7 +3440,7 @@ public final class LrclibFallback {
                         Object activeSong = currentSongFromPlayer(activeFragment);
                         if (activeSong != null
                                 && autoTranslateIfEnabled(ctx, activeSong)) {
-                            SourceSnapshot activeSource = translationSourceFor(activeSong);
+                            SourceSnapshot activeSource = translationSourceFor(ctx, activeSong);
                             if (activeSource != null) {
                                 renderTranslationPending(activeSong, activeSource.callback);
                             }
@@ -3308,7 +3455,7 @@ public final class LrclibFallback {
                             Object activeSong = currentSongFromPlayer(activeFragment);
                             if (activeSong != null) {
                                 renderOriginalLyricsIfCurrent(activeSong,
-                                        translationSourceFor(activeSong));
+                                        translationSourceFor(ctx, activeSong));
                             }
                         }
                         Toast.makeText(ctx, tr("auto_translate_disabled"),
@@ -3319,7 +3466,7 @@ public final class LrclibFallback {
                     }
                     return;
                 }
-                final SourceSnapshot snapshot = translationSourceFor(song);
+                final SourceSnapshot snapshot = translationSourceFor(ctx, song);
                 if (snapshot == null) {
                     Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
                     return;
@@ -3370,11 +3517,11 @@ public final class LrclibFallback {
                 Toast.makeText(ctx, tr("no_loaded"), Toast.LENGTH_SHORT).show();
                 return;
             }
-            SourceSnapshot snapshot = translationSourceFor(target);
+            SourceSnapshot snapshot = translationSourceFor(ctx, target);
             if ((snapshot == null || snapshot.lines.isEmpty())
                     && song != null && song != target) {
                 target = song;
-                snapshot = translationSourceFor(target);
+                snapshot = translationSourceFor(ctx, target);
             }
             if (snapshot == null || snapshot.lines.isEmpty()) {
                 Toast.makeText(ctx, tr("no_source_lyrics"), Toast.LENGTH_SHORT).show();
@@ -3782,13 +3929,13 @@ public final class LrclibFallback {
         try {
             if (ctx == null || song == null) return false;
             final TranslationSettings settings = readTranslationSettings(ctx);
-            final SourceSnapshot snapshot = translationSourceFor(song);
+            final SourceSnapshot snapshot = translationSourceFor(ctx, song);
             if (!canAutoTranslate(settings, snapshot)) return false;
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
                     TranslationSettings current = readTranslationSettings(ctx);
-                    SourceSnapshot latest = translationSourceFor(song);
+                    SourceSnapshot latest = translationSourceFor(ctx, song);
                     if (latest == null || !latest.songId.equals(snapshot.songId)
                             || !sameSourceLines(latest.lines, snapshot.lines)) return;
                     if (!sameTranslationSettings(settings, current)) {
