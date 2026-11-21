@@ -1,3 +1,9 @@
+## [1.17.6](https://github.com/0xgalal/anghami-patches/compare/v1.17.5...v1.17.6) (2026-11-21)
+
+### 🐛 Bug Fixes
+
+* auto-fill lyrics in Lyrics mode and search all sources ([9c634eb](https://github.com/0xgalal/anghami-patches/commit/9c634ebfed9281f3ba42ee952461aa7275adc186))
+
 ## [1.17.5](https://github.com/0xgalal/anghami-patches/compare/v1.17.4...v1.17.5) (2026-11-21)
 
 ### 🐛 Bug Fixes
